@@ -10,6 +10,12 @@ export interface Pack {
   knuckle: [string, string, string, string];
   render(sr: number): Float32Array[];
   drone?(sr: number): Float32Array;
+  /** 'all': a new sound fades out the previous one (strummed chords, melody notes). */
+  choke?: 'all' | 'none';
+  /** How long a sound's attacks last (ms): a strum's strings arrive over ~100 ms. */
+  spreadMs?: number;
+  /** Times (s) of the plucks inside the drone loop. */
+  droneHits?: number[];
 }
 
 const bp = (x: Float32Array, sr: number, f: number, q: number) => biquad(x, sr, 'bp', f, q);
@@ -89,8 +95,8 @@ function tanpura(sr: number): Float32Array {
 export const PACKS: Pack[] = [
   { id: 'drums', name: 'Drums', blurb: 'Kick, snare, hats, clap', finger: ['Kick', 'Snare', 'Hat', 'Clap'], knuckle: ['Tom', 'Rim', 'Open hat', 'Crash'], render: drums },
   { id: 'dhol', name: 'Dhol', blurb: 'Bols on a dhol', finger: ['Dhum', 'Ta', 'Tin', 'Dha'], knuckle: ['Ge', 'Na', 'Ke', 'Dhin'], render: dhol },
-  { id: 'guitar', name: 'Guitar', blurb: 'Four chords, every pop song', finger: ['C', 'G', 'Am', 'F'], knuckle: ['Cmaj7', 'G7', 'Am7', 'Fmaj7'], render: guitar },
-  { id: 'sitar', name: 'Sitar', blurb: 'Raga Bhupali over a tanpura', finger: ['Sa', 'Re', 'Ga', 'Pa'], knuckle: ['Dha', "Sa'", "Re'", "Ga'"], render: sitar, drone: tanpura },
+  { id: 'guitar', name: 'Guitar', blurb: 'Four chords, every pop song', finger: ['C', 'G', 'Am', 'F'], knuckle: ['Cmaj7', 'G7', 'Am7', 'Fmaj7'], render: guitar, choke: 'all', spreadMs: 110 },
+  { id: 'sitar', name: 'Sitar', blurb: 'Raga Bhupali over a tanpura', finger: ['Sa', 'Re', 'Ga', 'Pa'], knuckle: ['Dha', "Sa'", "Re'", "Ga'"], render: sitar, drone: tanpura, choke: 'all', spreadMs: 40, droneHits: [0, 1.1, 2.2, 3.3] },
 ];
 
 export const packById = (id: string) => PACKS.find(p => p.id === id) ?? PACKS[0];

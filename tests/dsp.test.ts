@@ -3,11 +3,10 @@ import { TapDetector, TapClassifier, surfaceQuality, rejectDistance } from '../s
 import { DEFAULT_CONFIG, type TableModel } from '../src/engine/protocol';
 import { makeTaps } from './synthTaps';
 
-function detect(x: Float32Array, sr: number, mask?: (det: TapDetector, blockStart: number) => void) {
+function detect(x: Float32Array, sr: number) {
   const det = new TapDetector(sr, DEFAULT_CONFIG);
   const taps: { frame: number; peak: number; feat: number[] }[] = [];
   for (let i = 0; i + 128 <= x.length; i += 128) {
-    mask?.(det, i);
     det.process(x.subarray(i, i + 128), o => taps.push({ frame: o.frame, peak: o.peak, feat: Array.from(o.feat) }));
   }
   return taps;
@@ -47,23 +46,5 @@ for (const sr of [44100, 48000]) describe(`DSP at ${sr} Hz`, () => {
     const ma = a.reduce((s, v) => s + v, 0) / a.length, mb = b.reduce((s, v) => s + v, 0) / b.length;
     const r = a.reduce((s, v, i) => s + (v - ma) * (b[i] - mb), 0) / Math.sqrt(a.reduce((s, v) => s + (v - ma) ** 2, 0) * b.reduce((s, v) => s + (v - mb) ** 2, 0));
     expect(r).toBeGreaterThan(0.7);
-  });
-});
-
-describe('own-sound masking', () => {
-  it('ignores the app\'s own loop playback leaking into the mic', () => {
-    const sr = 48000, { x, truth } = makeTaps({ sr, perZone: 15, seed: 3 });
-    let s = 11; const rnd = () => { s = (s * 1664525 + 1013904223) % 4294967296; return s / 4294967296; };
-    const L = Math.round(sr * 0.035), plays: number[] = [];
-    for (let t = sr; t < x.length - sr; t += Math.round(sr * (0.18 + rnd() * 0.25))) plays.push(t);
-    for (const t of plays) for (let k = 0; k < sr * 0.3 && t + L + k < x.length; k++)
-      x[t + L + k] += 0.05 * Math.exp(-k / sr * 18) * (Math.sin(2 * Math.PI * 90 * k / sr) + 0.5 * (rnd() * 2 - 1) * Math.exp(-k / sr * 60));
-    const unmasked = detect(x, sr);
-    let pi = 0;
-    const masked = detect(x, sr, (det, i) => { while (pi < plays.length && plays[pi] < i + 128) det.maskOutput(plays[pi++], L); });
-    const isReal = (f: number) => truth.some(v => Math.abs(v.t - f) < sr * 0.01);
-    expect(unmasked.filter(t => !isReal(t.frame)).length).toBeGreaterThan(10);
-    expect(masked.filter(t => !isReal(t.frame)).length).toBe(0);
-    expect(masked.filter(t => isReal(t.frame)).length).toBeGreaterThanOrEqual(truth.length * 0.85);
   });
 });

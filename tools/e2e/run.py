@@ -42,17 +42,27 @@ with sync_playwright() as p:
 
 taps = [e for e in log if e['type'] in ('tap', 'unsure')]
 cal = [e for e in log if e['type'] == 'calTap']
-play_truth = [t for t in truth if 26 <= t['sec'] < 45]
-mixed_truth = [t for t in truth if t['sec'] >= 51.5]
-# play taps: tap/unsure events from the 2nd one (1st = first-tap) until the knuckle calibration taps
-play_events = [e for e in taps[1:]][:len(play_truth)]
-zone_ok = sum(1 for e, t in zip(play_events, play_truth) if e['type'] == 'tap' and e['zone'] == t['z'])
-mixed_events = taps[1 + len(play_truth):]
-mz = sum(1 for e, t in zip(mixed_events, mixed_truth) if e['type'] == 'tap' and e['zone'] == t['z'])
-mk = sum(1 for e, t in zip(mixed_events, mixed_truth) if e['type'] == 'tap' and e['knuckle'] == t['kn'])
+# events carry audio frame numbers; the first tap event is the scripted first tap at 6.0 s
+sr_ctx = next((e['sampleRate'] for e in log if e['type'] == 'ready'), 44100)
+t0 = taps[0]['frame']
+sec = lambda e: 6.0 + (e['frame'] - t0) / sr_ctx
+def match(truth_part):
+    out = []
+    for t in truth_part:
+        e = next((e for e in taps if abs(sec(e) - t['sec']) < 0.02), None)
+        out.append((t, e))
+    return out
+play = match([t for t in truth if 26 <= t['sec'] < 45])
+mixed = match([t for t in truth if t['sec'] >= 51.5])
+det = lambda m: sum(1 for t, e in m if e)
+zok = lambda m: sum(1 for t, e in m if e and e['type'] == 'tap' and e['zone'] == t['z'])
+kok = lambda m: sum(1 for t, e in m if e and e['type'] == 'tap' and e['knuckle'] == t['kn'])
+phantom = sum(1 for e in taps[1:] if not any(abs(sec(e) - t['sec']) < 0.02 for t in truth))
 print(f'calibration taps captured: {len(cal)} (expected 28 = 20 zone + 8 knuckle)')
 print(f'calibration quality shown: {quality}')
-print(f'play: {len(play_events)} events for {len(play_truth)} taps, zone correct {zone_ok}/{len(play_truth)}')
-print(f'mixed: {len(mixed_events)} events for {len(mixed_truth)} taps, zone {mz}/{len(mixed_truth)}, finger/knuckle {mk}/{len(mixed_truth)}')
+print(f'play: detected {det(play)}/{len(play)}, zone correct {zok(play)}/{len(play)}')
+print(f'mixed finger/knuckle: detected {det(mixed)}/{len(mixed)}, zone {zok(mixed)}/{len(mixed)}, finger/knuckle {kok(mixed)}/{len(mixed)}')
+print(f'phantom taps: {phantom}')
 print(f'profile saved: {prof and prof["name"]}, zone taps {prof and len(prof["zoneTaps"])}, knuckle taps {prof and len(prof["knuckleTaps"])}')
 print('errors:', errs)
+json.dump(log, open(f'{OUT}/log.json', 'w'))

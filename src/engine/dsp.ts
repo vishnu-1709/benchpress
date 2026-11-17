@@ -7,7 +7,14 @@ export const N_FEAT = N_BANDS + 2; // bands + spectral centroid + decay ratio
 
 export interface Onset { frame: number; peak: number; feat: Float64Array }
 
-/** Onset detector + feature extractor working on a stream of mono blocks. */
+/**
+ * Onset detector + feature extractor working on a stream of mono blocks.
+ *
+ * Echo rejection (phone speaker): every sound the app plays has an attack, and that attack reaches the mic a fixed
+ * delay later. The detector watches its own output for attacks, learns the delay from a histogram of
+ * (mic onset - output attack) times, where echoes pile up at one value and real taps spread out, and ignores mic
+ * onsets that land right on an expected echo. Until the delay is known it ignores a wide window instead.
+ */
 export class TapDetector {
   readonly sr: number;
   private cfg: DspConfig;
@@ -21,12 +28,30 @@ export class TapDetector {
   noise = 1e-4;
   private lastOnset = -1e12;
   private pendingOnset = -1; private pendingDue = -1;
-  private masks = new Float64Array(128); private maskN = 0; // pairs [from,to]
   private nfft = 1; private winN = 0; private preN = 0;
   private re: Float64Array; private im: Float64Array; private hann: Float64Array;
   private bandOf: Int16Array;
   readonly feat = new Float64Array(N_FEAT);
   lastRms = 0;
+
+  // ---- echo rejection state (all in 1 ms frames) ----
+  private gate = false;
+  private outEnv = new Float32Array(1024); private outFrames = 0; private outAcc = 0; private outN = 0;
+  private attacks = new Float64Array(64); private spreads = new Float32Array(64); private learnable = new Uint8Array(64); private attackN = 0; // our sound starts
+  private matchedLearnable = false;
+  private checked = new Uint8Array(64);
+  private soundsSeen = 0;       // played sounds whose echo window has passed
+  /** True once we've seen that our own sounds don't reach the mic loudly enough to matter. */
+  quietSpeaker = false;
+  private delayHist = new Float32Array(200);                    // 2 ms bins, 0..400 ms
+  private delayMs: number | null = null; private delayLearned = false;
+  leak = 0.45;                 // mic level / output level at the echo delay: learned from identified echoes
+  private echoMargin = 1.5;      // outside attack windows, a tap must be this much louder than the expected echo
+  /** How many onsets were rejected as echoes (debug / tests). */
+  echoesRejected = 0;
+  /** Echo delay (ms): measured or learned, null if unknown. */
+  get echoDelayMs() { return this.delayMs; }
+  get echoDelayLearned() { return this.delayLearned; }
 
   constructor(sr: number, cfg: DspConfig) {
     this.sr = sr; this.cfg = { ...cfg };
@@ -56,16 +81,82 @@ export class TapDetector {
     }
   }
 
-  /** Our own output reaches the mic about `latency` frames after `start`; ignore onsets around then. */
-  maskOutput(start: number, latency: number, widthMs = 25) {
-    const a = start + latency - Math.round(this.sr * 0.005), b = a + Math.round(this.sr * widthMs / 1000);
-    if (this.maskN >= 64) { this.masks.copyWithin(0, 2); this.maskN--; }
-    this.masks[this.maskN * 2] = a; this.masks[this.maskN * 2 + 1] = b; this.maskN++;
+  /** Echo rejection on (phone speaker) or off (headphones). measuredDelayFrames: from the click test, if it worked. */
+  setEchoGate(on: boolean, measuredDelayFrames: number | null = null, measuredLeak: number | null = null) {
+    this.gate = on;
+    if (measuredDelayFrames != null && !this.delayLearned) this.delayMs = measuredDelayFrames * 1000 / this.sr;
+    if (measuredLeak != null) this.leak = Math.max(0.02, measuredLeak);
+    if (measuredLeak != null && measuredLeak < 0.05) this.quietSpeaker = true;
   }
 
-  private masked(t: number) {
-    for (let i = 0; i < this.maskN; i++) if (t >= this.masks[i * 2] && t <= this.masks[i * 2 + 1]) return true;
-    return false;
+  /**
+   * The app is starting a sound at sample `frame`. spreadMs: how long its attacks last (a strum's 6 strings ~100 ms).
+   * Echoes of it will be ignored; the delay to its echo is learned from these events.
+   */
+  noteOutputStart(frame: number, spreadMs = 20, inLevel = true) {
+    const f = Math.floor(frame / this.hop), k = this.attackN & 63;
+    this.attacks[k] = f; this.spreads[k] = spreadMs; this.learnable[k] = inLevel ? 1 : 0; this.checked[k] = 0; this.attackN++;
+  }
+
+  /** Feed every output block right after rendering it, so the detector knows what it will hear back. */
+  feedOutput(block: Float32Array) {
+    for (let i = 0; i < block.length; i++) {
+      this.outAcc += block[i] * block[i]; this.outN++;
+      if (this.outN === this.hop) {
+        const v = Math.sqrt(this.outAcc / this.hop), f = this.outFrames;
+        this.outEnv[f & 1023] = v; this.outFrames++; this.outAcc = 0; this.outN = 0;
+      }
+    }
+  }
+
+  /** Is ms-frame f where an echo of our own output would land? Also feeds the delay histogram. */
+  private isEcho(f: number, learn: boolean): boolean {
+    let echo = false; this.matchedLearnable = false;
+    const n = Math.min(this.attackN, 64);
+    for (let i = 0; i < n; i++) {
+      const k = (this.attackN - 1 - i) & 63, d = f - this.attacks[k];
+      if (d < 0 || d > 500) continue;
+      if (learn && d < 400) this.delayHist[Math.floor(d / 2)] += 1;
+      if (this.delayMs == null) { if (!this.quietSpeaker && d >= 5 && d <= 350 + this.spreads[k]) echo = true; } // unknown: wide
+      else if (d >= this.delayMs - 10 && d <= this.delayMs + 15 + this.spreads[k]) { echo = true; if (this.learnable[k] && Math.abs(d - this.delayMs) <= 8) this.matchedLearnable = true; }
+    }
+    if (learn) this.updateDelay();
+    return echo;
+  }
+
+  /**
+   * Echoes always come back at the same delay; taps come at random times. If several sounds have played and no
+   * consistent delay has appeared in the histogram, our speaker isn't reaching the mic: relax.
+   */
+  private checkSilentEchoes(f: number) {
+    const n = Math.min(this.attackN, 64);
+    for (let i = 0; i < n; i++) {
+      const k = (this.attackN - 1 - i) & 63;
+      if (this.checked[k] || !this.learnable[k] || f - this.attacks[k] < 400) continue;
+      this.checked[k] = 1; this.soundsSeen++;
+      if (!this.delayLearned && this.soundsSeen >= 8) { this.quietSpeaker = true; this.leak = Math.max(0.03, this.leak * 0.8); }
+    }
+    if (this.delayLearned) this.quietSpeaker = false;
+  }
+
+  /** Loudest own output that could be arriving at the mic now (ms-frame f). */
+  private echoLevel(f: number): number {
+    let a: number, b: number;
+    if (this.delayMs == null) { a = f - 350; b = f - 3; } else { a = f - this.delayMs - 8; b = f - this.delayMs + 8; }
+    a = Math.max(a, this.outFrames - 1000, 0); b = Math.min(b, this.outFrames - 1);
+    let m = 0; for (let j = a; j <= b; j++) { const v = this.outEnv[j & 1023]; if (v > m) m = v; }
+    return m;
+  }
+
+  private updateDelay() {
+    let best = 0, bestI = -1, sum = 0;
+    for (let i = 0; i < 200; i++) {
+      const v = this.delayHist[i] + 0.5 * ((this.delayHist[i - 1] ?? 0) + (this.delayHist[i + 1] ?? 0));
+      sum += this.delayHist[i]; if (v > best) { best = v; bestI = i; }
+    }
+    // echoes stack in one bin; taps spread over all of them
+    if (bestI >= 0 && best >= 5 && best > 10 * sum / 200) { this.delayMs = bestI * 2 + 1; this.delayLearned = true; }
+    if (sum > 400) for (let i = 0; i < 200; i++) this.delayHist[i] *= 0.5;   // keep adapting
   }
 
   /** Feed one block. Calls onTap for every completed onset (feature vector is reused: copy it if kept). */
@@ -81,14 +172,29 @@ export class TapDetector {
         const rms = Math.sqrt(this.acc / this.hop); this.acc = 0; this.accN = 0;
         this.hist[this.hi & 7] = rms; this.hi++;
         const past = this.hist[(this.hi - 6) & 7];
-        this.noise = rms < this.noise ? 0.9 * this.noise + 0.1 * rms : this.noise * 1.0005;
+        // noise floor: falls fast, rises slowly (about 2x per 7 s) so ringing sounds don't drown out taps
+        this.noise = rms < this.noise ? 0.9 * this.noise + 0.1 * rms : this.noise * 1.0001;
         if (this.hi < 50) { this.noise = Math.max(this.noise, rms); continue; }
+        if (this.gate) this.checkSilentEchoes(this.hi - 1);
         const since = (this.total - this.lastOnset) * 1000 / this.sr;
-        if (this.pendingOnset < 0 && rms > this.noise * threshold && rms > past * rise && rms > 2e-4 &&
-            since > refractoryMs && !this.masked(this.total)) {
+        // while our own sound rings, a tap only adds to it: ask for a smaller jump
+        const ringing = this.gate && this.outEnv[(this.outFrames - 1) & 1023] > 0.003;
+        const needRise = ringing ? Math.min(rise, 3) : rise;
+        if (this.pendingOnset < 0 && rms > this.noise * threshold && rms > past * needRise && rms > 2e-4 && since > refractoryMs) {
+          this.lastOnset = this.total;
+          if (this.gate) {
+            const f = this.hi - 1, lvl = this.echoLevel(f);
+            if (this.isEcho(f, true)) {
+              // a known echo: learn how loud our echoes are at the mic
+              if (this.matchedLearnable && lvl > 0.01) {
+                const r = Math.min(1.5, rms / lvl); this.leak = r > this.leak ? 0.5 * (this.leak + r) : 0.95 * this.leak + 0.05 * r;
+              }
+              this.echoesRejected++; continue;
+            }
+            if (rms < this.echoMargin * this.leak * lvl) { this.echoesRejected++; continue; } // not louder than our own echo
+          }
           this.pendingOnset = this.total - this.hop;
           this.pendingDue = this.pendingOnset + this.winN - this.preN;
-          this.lastOnset = this.total;
         }
       }
       if (this.pendingOnset >= 0 && this.total >= this.pendingDue) {
@@ -97,12 +203,6 @@ export class TapDetector {
         this.pendingOnset = -1;
       }
     }
-    // housekeeping: drop expired masks
-    let w = 0;
-    for (let i = 0; i < this.maskN; i++) if (this.masks[i * 2 + 1] >= this.total - this.sr) {
-      this.masks[w * 2] = this.masks[i * 2]; this.masks[w * 2 + 1] = this.masks[i * 2 + 1]; w++;
-    }
-    this.maskN = w;
     this.lastRms = Math.sqrt(blockPow / Math.max(1, block.length));
   }
 

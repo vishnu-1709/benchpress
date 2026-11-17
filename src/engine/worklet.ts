@@ -12,7 +12,7 @@ const MAX_VOICES = 24;
 const MAX_LOOP_EVENTS = 1024;
 const MAX_LOOP_SEC = 30;
 
-interface Voice { buf: Float32Array | null; pos: number; gain: number }
+interface Voice { buf: Float32Array | null; pos: number; gain: number; fade: number; quiet: boolean }
 
 class BenchpressProcessor extends AudioWorkletProcessor {
   private det = new TapDetector(sampleRate, DEFAULT_CONFIG);
@@ -21,10 +21,13 @@ class BenchpressProcessor extends AudioWorkletProcessor {
   private kits = new Map<string, Float32Array[]>();
   private kitIds: string[] = [];          // index -> id, so loop events can store a small int
   private current = '';
-  private voices: Voice[] = Array.from({ length: MAX_VOICES }, () => ({ buf: null, pos: 0, gain: 0 }));
+  private voices: Voice[] = Array.from({ length: MAX_VOICES }, () => ({ buf: null, pos: 0, gain: 0, fade: -1, quiet: false }));
+  private choke = false; private chokeIds = new Set<string>(); private fadeLen = Math.round(sampleRate * 0.03);
+  private spreadOf = new Map<string, number>();
+  private droneHits: number[] = [];
+  private tick: Float32Array;
   private drone: Float32Array | null = null; private dronePos = 0; private droneGain = 0; private droneTarget = 0;
   private headphones = false;
-  private latencyFrames = Math.round(sampleRate * 0.04);
   private clsOut = { zone: 0, knuckle: false, velocity: 0, confidence: 0 };
   // loop recorder (preallocated)
   private loopPhase: LoopPhase = 'empty'; private loopStart = 0; private loopLen = 0; private layers = 0;
@@ -38,6 +41,9 @@ class BenchpressProcessor extends AudioWorkletProcessor {
 
   constructor() {
     super();
+    this.tick = new Float32Array(Math.round(sampleRate * 0.006));
+    for (let i = 0; i < this.tick.length; i++) this.tick[i] = Math.sin(2 * Math.PI * 2200 * i / sampleRate) * Math.exp(-i / (sampleRate * 0.0012));
+    this.det.setEchoGate(true, null);
     this.click = new Float32Array(Math.round(sampleRate * 0.01));
     for (let i = 0; i < this.click.length; i++) this.click[i] = Math.exp(-i / (sampleRate * 0.0015)) * (i % 8 < 4 ? 0.9 : -0.9);
     this.port.onmessage = (e: MessageEvent<ToWorklet>) => this.onMessage(e.data);
@@ -52,32 +58,38 @@ class BenchpressProcessor extends AudioWorkletProcessor {
       case 'model': this.cls = m.model ? new TapClassifier(m.model) : null; break;
       case 'instrument':
         if (!this.kits.has(m.id)) this.kitIds.push(m.id);
-        this.kits.set(m.id, m.sounds); if (!this.current) this.current = m.id; break;
-      case 'select': if (this.kits.has(m.id)) this.current = m.id; break;
+        this.kits.set(m.id, m.sounds); if (m.choke) this.chokeIds.add(m.id); this.spreadOf.set(m.id, m.spreadMs);
+        if (!this.current) this.select(m.id); break;
+      case 'select': if (this.kits.has(m.id)) this.select(m.id); break;
       case 'drone':
-        if (m.buffer) { this.drone = m.buffer; this.droneTarget = m.gain; } else this.droneTarget = 0; break;
+        if (m.buffer) { this.drone = m.buffer; this.droneTarget = m.gain; this.droneHits = m.hits.map(h => Math.round(h * sampleRate)); }
+        else { this.droneTarget = 0; this.droneHits = []; }
+        break;
       case 'mode': this.mode = m.mode; break;
-      case 'headphones': this.headphones = m.on; break;
+      case 'headphones': this.headphones = m.on; this.det.setEchoGate(!m.on, null); break;
       case 'loop': m.cmd === 'clear' ? this.loopClear() : this.loopToggle(); break;
       case 'latencyTest': this.latTestAt = currentFrame + 128; break;
       case 'preview': this.startVoice(this.kits.get(this.current)?.[m.sound] ?? null, m.gain, currentFrame); break;
     }
   }
 
-  private startVoice(buf: Float32Array | null, gain: number, frame: number) {
+  private startVoice(buf: Float32Array | null, gain: number, frame: number, spreadMs = 25, quiet = false) {
     if (!buf) return;
+    if (this.choke) for (const x of this.voices) if (x.buf && x.fade < 0) x.fade = this.fadeLen; // new chord/note mutes the last
     let v = this.voices[0];
     for (const x of this.voices) { if (!x.buf) { v = x; break; } if (x.pos > v.pos) v = x; } // free or oldest
-    v.buf = buf; v.pos = 0; v.gain = gain;
-    if (!this.headphones) this.det.maskOutput(frame, this.latencyFrames);
+    v.buf = buf; v.pos = 0; v.gain = gain; v.fade = -1; v.quiet = quiet;
+    this.det.noteOutputStart(frame, spreadMs, !quiet);
   }
+
+  private select(id: string) { this.current = id; this.choke = this.chokeIds.has(id); }
 
   private soundFor(zone: number, knuckle: boolean) { return zone * 2 + (knuckle ? 1 : 0); }
 
   private playSound(sound: number, velocity: number, onsetFrame: number) {
     const kit = this.kits.get(this.current); if (!kit) return;
     const gain = Math.pow(velocity, 1.4);
-    this.startVoice(kit[sound], gain, currentFrame);
+    this.startVoice(kit[sound], gain, currentFrame, this.spreadOf.get(this.current) ?? 25);
     if (this.loopPhase === 'recording' || this.loopPhase === 'overdub') this.loopRecord(sound, gain, onsetFrame);
   }
 
@@ -86,7 +98,9 @@ class BenchpressProcessor extends AudioWorkletProcessor {
     if (this.latTestAt > 0 && currentFrame > this.latTestAt) {
       const d = o.frame - this.latTestAt;
       if (d > 0 && d < sampleRate * 0.5) {
-        this.latencyFrames = d; this.latTestAt = -1;
+        this.latTestAt = -1;
+        // click peak 0.9 → what the mic heard of it is the leak (RMS-ish ratio, padded a little)
+        this.det.setEchoGate(!this.headphones, d, Math.min(1, 1.3 * o.peak / 0.9));
         this.post({ type: 'latency', ms: d / sampleRate * 1000, leak: Math.min(1, o.peak / 0.9) });
         return;
       }
@@ -95,7 +109,7 @@ class BenchpressProcessor extends AudioWorkletProcessor {
     if (mode.kind === 'idle') return;
     if (mode.kind === 'first') { this.playSound(2, Math.min(1, 0.4 + o.peak * 4), o.frame); this.post({ type: 'tap', zone: -1, knuckle: false, velocity: 0.8, confidence: 1, frame: o.frame }); return; }
     if (mode.kind === 'calibrate' || mode.kind === 'calibrateKnuckle') {
-      this.playSound(this.soundFor(mode.zone, mode.kind === 'calibrateKnuckle'), 0.8, o.frame);
+      this.startVoice(this.tick, 0.12, currentFrame, 10, true); // tiny, quiet tick: almost nothing to echo
       this.post({ type: 'calTap', feat: Array.from(o.feat), peak: o.peak, frame: o.frame });
       return;
     }
@@ -140,7 +154,8 @@ class BenchpressProcessor extends AudioWorkletProcessor {
       if ((t >= a && t < b) || (b > L && t < b - L)) {
         if (this.evSkip[i]) { this.evSkip[i] = 0; continue; }
         const kit = this.kits.get(this.kitIds[this.evKit[i]]);
-        if (kit) this.startVoice(kit[this.evSound[i]], this.evGain[i], from);
+        const id = this.kitIds[this.evKit[i]];
+        if (kit) this.startVoice(kit[this.evSound[i]], this.evGain[i], from, this.spreadOf.get(id) ?? 25);
       }
     }
   }
@@ -154,19 +169,32 @@ class BenchpressProcessor extends AudioWorkletProcessor {
     if (this.latTestAt > 0 && currentFrame <= this.latTestAt && this.latTestAt < currentFrame + n) {
       const v = this.voices[0]; v.buf = this.click; v.pos = 0; v.gain = 1; // no mask: we want to hear it
     }
-    if (this.latTestAt > 0 && currentFrame - this.latTestAt > sampleRate * 0.6) { this.latTestAt = -1; this.post({ type: 'latency', ms: null, leak: 0 }); }
+    if (this.latTestAt > 0 && currentFrame - this.latTestAt > sampleRate * 0.6) {
+      // a full-volume click the mic never heard: our speaker barely reaches the mic
+      this.latTestAt = -1; this.det.setEchoGate(!this.headphones, null, 0.03); this.post({ type: 'latency', ms: null, leak: 0 });
+    }
     out.fill(0);
-    for (const v of this.voices) {
-      const b = v.buf; if (!b) continue;
-      const m = Math.min(n, b.length - v.pos), g = v.gain;
-      for (let i = 0; i < m; i++) out[i] += b[v.pos + i] * g;
-      v.pos += m; if (v.pos >= b.length) v.buf = null;
+    // two passes: played sounds first (the echo level gate listens to these), then quiet ticks
+    for (let pass = 0; pass < 2; pass++) {
+      if (pass === 1) this.det.feedOutput(out);
+      for (const v of this.voices) {
+        const b = v.buf; if (!b || v.quiet !== (pass === 1)) continue;
+        const m = Math.min(n, b.length - v.pos);
+        if (v.fade < 0) { const g = v.gain; for (let i = 0; i < m; i++) out[i] += b[v.pos + i] * g; }
+        else { for (let i = 0; i < m; i++) { out[i] += b[v.pos + i] * v.gain * (v.fade / this.fadeLen); if (v.fade > 0) v.fade--; } }
+        v.pos += m; if (v.pos >= b.length || v.fade === 0) v.buf = null;
+      }
     }
     if (this.drone && (this.droneGain > 0 || this.droneTarget > 0)) {
       const d = this.drone, step = 1 / (sampleRate * 0.8);
       for (let i = 0; i < n; i++) {
         this.droneGain += this.droneGain < this.droneTarget ? Math.min(step, this.droneTarget - this.droneGain) : -Math.min(step, this.droneGain - this.droneTarget);
         out[i] += d[this.dronePos] * this.droneGain; this.dronePos = (this.dronePos + 1) % d.length;
+      }
+      // the drone's plucks are sounds too: register them so their echoes are ignored
+      if (this.droneGain > 0.01) for (const h of this.droneHits) {
+        const p = this.dronePos - n;
+        if ((h >= p && h < this.dronePos) || (p < 0 && h >= p + d.length)) this.det.noteOutputStart(currentFrame + ((h - p + d.length) % d.length), 30, false);
       }
     }
     for (let i = 0; i < n; i++) { const x = out[i]; out[i] = x > 1 ? 1 : x < -1 ? -1 : x; } // hard safety clip

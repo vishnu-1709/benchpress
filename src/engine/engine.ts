@@ -49,12 +49,12 @@ export class Engine {
   setModel(model: TableModel | null) { this.send({ type: 'model', model }); }
   setMode(mode: Mode) { this.send({ type: 'mode', mode }); }
   setHeadphones(on: boolean) { this.send({ type: 'headphones', on }); }
-  loadInstrument(id: string, sounds: Float32Array[]) {
+  loadInstrument(id: string, sounds: Float32Array[], choke = false, spreadMs = 25) {
     // copies are sent (not transferred) so the page can re-send after a reload of the worklet
-    this.send({ type: 'instrument', id, sounds: sounds.map(s => s.slice()) });
+    this.send({ type: 'instrument', id, sounds: sounds.map(s => s.slice()), choke, spreadMs });
   }
   select(id: string) { this.send({ type: 'select', id }); }
-  drone(buffer: Float32Array | null, gain = 0.35) { this.send({ type: 'drone', buffer: buffer ? buffer.slice() : null, gain }); }
+  drone(buffer: Float32Array | null, gain = 0.35, hits: number[] = []) { this.send({ type: 'drone', buffer: buffer ? buffer.slice() : null, gain, hits }); }
   loop(cmd: 'toggle' | 'clear') { this.send({ type: 'loop', cmd }); }
   latencyTest() { this.send({ type: 'latencyTest' }); }
   preview(sound: number, gain = 0.8) { this.send({ type: 'preview', sound, gain }); }

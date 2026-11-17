@@ -50,7 +50,7 @@ function ensurePack(id: string) {
   const p = packById(id);
   if (!loadedPacks.has(p.id)) {
     const r = renderPack(p, engine.sampleRate);
-    engine.loadInstrument(p.id, r.sounds);
+    engine.loadInstrument(p.id, r.sounds, p.choke === 'all', p.spreadMs ?? 25);
     loadedPacks.add(p.id);
   }
   return p;
@@ -59,7 +59,7 @@ function selectPack(id: string) {
   const p = ensurePack(id);
   engine.select(p.id);
   const r = renderPack(p, engine.sampleRate);
-  engine.drone(r.drone ?? null, 0.3);
+  engine.drone(r.drone ?? null, 0.12, p.droneHits ?? []);
   prefs.pack = p.id; savePrefs();
   renderPads(); renderChips();
 }
@@ -198,6 +198,8 @@ async function startFirstTap() {
   engine.latencyTest();
   const r = await once('latency', 1500);
   if (r?.ms != null) latencyMs = r.ms;
+  if (r && r.leak > 0.35 && !prefs.headphones)
+    toast('The mic can hear your speaker. Headphones work best, or turn the volume down.', 5000);
   $('#first-title').textContent = 'Tap the table near me.';
   $('#first-sub').textContent = 'Go on — hit it.';
   setMode({ kind: 'first' });
@@ -218,7 +220,7 @@ function startCalibration(kind: CalKind) {
   hideBanner();
   cal = { kind, zone: 0, per: kind === 'full' ? 5 : 2, taps: [] };
   $('#cal-sub').textContent = kind === 'full'
-    ? 'Pick a spot about a hand away from the phone. Every tap already plays.'
+    ? 'Pick a spot about a hand away from the phone. Each tap ticks quietly so I can listen.'
     : 'Two taps on each spot you already use.';
   show('calibrate'); setCalZone(0);
 }
