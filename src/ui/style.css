@@ -133,3 +133,8 @@ h3 { font-size: 14px; font-weight: 600; margin-top: 14px; }
 .toast { position: fixed; left: 50%; bottom: calc(110px + var(--safe-b)); transform: translateX(-50%); background: #1d1d26; border: 1px solid var(--line);
   padding: 10px 16px; border-radius: 14px; font-size: 14px; opacity: 0; transition: opacity .25s; z-index: 20; pointer-events: none; white-space: nowrap; }
 .toast.show { opacity: 1; }
+
+.meter { position: relative; width: 220px; height: 8px; border-radius: 99px; background: #1e1e26; overflow: visible; }
+.meter i { display: block; height: 100%; width: 0; border-radius: 99px; background: #555; transition: width .05s; }
+.meter i.over { background: var(--z3); }
+.meter b { position: absolute; top: -4px; width: 2px; height: 16px; background: var(--ink); left: 0; }

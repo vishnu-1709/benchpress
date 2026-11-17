@@ -29,6 +29,7 @@ function show(s: Screen) {
   screen = s;
   $$('.screen').forEach(el => el.classList.toggle('active', el.dataset.screen === s));
   keepAwake(['first', 'calibrate', 'caldone', 'play'].includes(s));
+  applyDrone();
 }
 function openOverlay(id: string) { $('#' + id).classList.remove('hidden'); if (id === 'settings') renderSettings(); }
 function closeOverlay(id: string) { $('#' + id).classList.add('hidden'); }
@@ -64,12 +65,17 @@ function ensurePack(id: string) {
   }
   return p;
 }
+/** The drone plays only on the play screen: anywhere else it would echo back and be heard as taps. */
+function applyDrone() {
+  if (!engine.running) return;
+  const p = packById(prefs.pack), r = renderPack(p, engine.sampleRate);
+  if (screen === 'play' && r.drone) engine.drone(r.drone, 0.12, p.droneHits ?? []); else engine.drone(null);
+}
 function selectPack(id: string) {
   const p = ensurePack(id);
   engine.select(p.id);
-  const r = renderPack(p, engine.sampleRate);
-  engine.drone(r.drone ?? null, 0.12, p.droneHits ?? []);
   prefs.pack = p.id; savePrefs();
+  applyDrone();
   renderPads(); renderChips();
 }
 
@@ -93,6 +99,7 @@ listeners.push(m => {
     const s = Math.min(1, Math.max(0, m.rms) * 40);
     $('#ring').style.transform = `scale(${1 + s * 0.5})`; $('#ring').style.borderColor = s > 0.3 ? '#fff' : '';
     $('#listen-dot').style.transform = `scale(${1 + s * 1.5})`;
+    if (screen === 'calibrate') { const f = $('#cal-meter'); f.style.width = `${meterPos(m.rms) * 100}%`; f.classList.toggle('over', m.rms > calFloor); }
     if (m.rms < 0) { $('#listen-text').textContent = 'mic stopped — reload'; }
   }
   if (m.type === 'tap') onPlayTap(m.zone, m.knuckle, m.velocity);
@@ -227,15 +234,34 @@ function onFirstTap(vel: number) {
 type CalKind = 'full' | 'quick';
 let cal: { kind: CalKind; zone: number; per: number; taps: CalTap[] } | null = null;
 let lastCalAt = 0;
-function startCalibration(kind: CalKind) {
+let calFloor = 0;
+async function startCalibration(kind: CalKind) {
   hideBanner();
-  cal = { kind, zone: 0, per: kind === 'full' ? 5 : 2, taps: [] };
-  if (kind === 'full') engine.setConfig({ ...config(), minLevel: DEFAULT_CONFIG.minLevel });
+  cal = null; setMode({ kind: 'idle' });
+  show('calibrate');
+  // 1 s quiet check: learn the room's background so only real taps count
+  $('#cal-title').innerHTML = 'Hands off the table…';
+  $('#cal-sub').textContent = 'Listening to the room for a second.';
+  $('#cal-dots').innerHTML = '';
+  $$('#cal-map b').forEach(b => b.classList.remove('now', 'done'));
+  const levels: number[] = [];
+  const stop = engine.on(m => { if (m.type === 'level' && m.rms >= 0) levels.push(m.rms); });
+  await new Promise(r => setTimeout(r, 1000));
+  stop();
+  levels.sort((a, b) => a - b);
+  const room = levels.length ? levels[Math.floor(levels.length * 0.95)] : 0;
+  calFloor = Math.max(DEFAULT_CONFIG.minLevel, 5 * room);
+  engine.setConfig({ ...config(), minLevel: kind === 'full' ? calFloor : Math.max(calFloor, config().minLevel) });
+  $('#cal-floor').style.left = `${meterPos(calFloor) * 100}%`;
+  $('#cal-title').innerHTML = 'Tap where <span id="cal-color">blue</span> lives.';
   $('#cal-sub').textContent = kind === 'full'
     ? 'Pick a spot about a hand away from the phone. Tap firmly, one tap at a time. I stay silent while I listen.'
     : 'Two taps on each spot you already use.';
-  show('calibrate'); setCalZone(0);
+  cal = { kind, zone: 0, per: kind === 'full' ? 5 : 2, taps: [] };
+  setCalZone(0);
 }
+/** Level meter position, log scale from -80 dB to 0 dB. */
+const meterPos = (rms: number) => Math.max(0, Math.min(1, (20 * Math.log10(Math.max(rms, 1e-4)) + 80) / 80));
 function setCalZone(z: number) {
   if (!cal) return;
   cal.zone = z;
