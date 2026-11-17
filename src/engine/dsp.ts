@@ -336,7 +336,8 @@ export class TapClassifier {
     out.knuckle = this.type ? this.type.predict(feat, this.o) === 1 : false;
     const z = this.zone.predict(feat, this.o);
     this.lastDist = this.o.dist;
-    const far = this.o.dist > this.reject;
+    // three nearest calibration taps from three different areas = genuinely unclear: play nothing rather than guess
+    const far = this.o.dist > this.reject || this.o.conf < 0.5;
     out.confidence = far ? 0 : this.o.conf;
     out.zone = far ? -1 : z;
     const ref = this.peaks[Math.max(0, z)] || peak;

@@ -8,10 +8,20 @@ export interface SideTap { zone: number; feat: number[]; motion?: number[] | nul
 
 const MOTION_W = Math.sqrt(N_FEAT / MOTION_DIM); // so sound and motion weigh about the same in 'both'
 
+/**
+ * Direction of the jolt only: rotation (x, y, z) and acceleration (x, y, z) each scaled to length 1.
+ * A soft and a hard tap on the same side then look alike; how hard you tapped only sets the volume.
+ */
+export function motionDirection(m: number[]): number[] {
+  const unit = (a: number[]) => { const n = Math.hypot(...a); return n > 1e-6 ? a.map(v => v / n) : a.map(() => 0); };
+  return [...unit(m.slice(0, 3)), ...unit(m.slice(3, 6))];
+}
+
 export function vectorOf(t: { feat: number[]; motion?: number[] | null }, m: Method): number[] | null {
   if (m === 'sound') return t.feat;
   if (!t.motion) return null;
-  return m === 'motion' ? t.motion : [...t.feat, ...t.motion];
+  const dir = motionDirection(t.motion);
+  return m === 'motion' ? dir : [...t.feat, ...dir];
 }
 const weightsOf = (m: Method) => m === 'both' ? [...Array(N_FEAT).fill(1), ...Array(MOTION_DIM).fill(MOTION_W)] : undefined;
 
@@ -22,6 +32,20 @@ export function looAccuracy(taps: SideTap[], m: Method): { acc: number; n: numbe
   const knn = new Knn(usable.map(u => u.v), usable.map(u => u.t.zone), 3, weightsOf(m)), o = { dist: 0, conf: 0 };
   let ok = 0; usable.forEach((u, i) => { if (knn.predict(u.v, o, i) === u.t.zone) ok++; });
   return { acc: ok / usable.length, n: usable.length };
+}
+
+/** Leave-one-out confusion for one method: per-side accuracy and the most mixed-up pair. */
+export function confusion(taps: SideTap[], m: Method) {
+  const usable = taps.map(t => ({ t, v: vectorOf(t, m) })).filter(x => x.v) as { t: SideTap; v: number[] }[];
+  const M = Array.from({ length: 4 }, () => Array(4).fill(0));
+  if (usable.length >= 8) {
+    const knn = new Knn(usable.map(u => u.v), usable.map(u => u.t.zone), 3, weightsOf(m)), o = { dist: 0, conf: 0 };
+    usable.forEach((u, i) => { M[u.t.zone][knn.predict(u.v, o, i)]++; });
+  }
+  const perSide = M.map((row, z) => { const n = row.reduce((a, b) => a + b, 0); return n ? row[z] / n : 0; });
+  let worst = { a: 0, b: 1, n: 0 };
+  for (let a = 0; a < 4; a++) for (let b = a + 1; b < 4; b++) if (M[a][b] + M[b][a] > worst.n) worst = { a, b, n: M[a][b] + M[b][a] };
+  return { perSide, worst: worst.n ? worst : null };
 }
 
 export interface MethodChoice { method: Method; scores: Record<Method, number> }

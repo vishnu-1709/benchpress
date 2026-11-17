@@ -8,7 +8,7 @@ import { Fx } from './ui/fx';
 import { Recorder } from './app/recorder';
 import { Inspector } from './ui/inspect';
 import { motion } from './app/motion';
-import { chooseMethod, SideClassifier, type Method } from './app/sides';
+import { chooseMethod, confusion, SideClassifier, type Method } from './app/sides';
 import { TapClassifier } from './engine/dsp';
 import { buildModel, mergeTaps, profiles, typicalTapRms, type CalTap, type TableProfile } from './app/profiles';
 import {
@@ -350,6 +350,16 @@ async function finishCalibration() {
   const draft = profiles.create('draft', engine.sampleRate, null, cal.taps, profile?.knuckleTaps ?? []);
   decideMethod(draft);
   const q = draft.quality, sc = draft.scores!;
+  const cf = confusion([...draft.zoneTaps, ...draft.knuckleTaps], draft.method!);
+  const SIDE = ['left (blue)', 'top (pink)', 'right (yellow)', 'bottom (green)'];
+  const per = cf.perSide.map((a, z) => `${SIDE[z].split(' ')[0]} ${Math.round(a * 100)}%`).join(' · ');
+  const worst = cf.worst && cf.worst.n >= 2 ? ` Most mixed up: ${SIDE[cf.worst.a]} ↔ ${SIDE[cf.worst.b]}.` : '';
+  // perfectly even pacing can confuse the motion clock sync
+  const gaps = cal.taps.slice(1).map((t, i) => (t.at ?? 0) - (cal!.taps[i].at ?? 0)).filter(g => g > 0 && g < 2000);
+  const mean = gaps.reduce((a, b) => a + b, 0) / Math.max(1, gaps.length);
+  const cv = Math.sqrt(gaps.reduce((a, g) => a + (g - mean) ** 2, 0) / Math.max(1, gaps.length)) / (mean || 1);
+  const pacing = draft.method !== 'sound' && cv < 0.12 ? ' Tip: tap at an uneven pace when calibrating.' : '';
+  $('#side-text').textContent = `${per}.${worst}${pacing}`;
   $('#method-text').textContent = motion.usable
     ? `Sound ${Math.round(sc.sound * 100)}% · Motion ${Math.round(sc.motion * 100)}% · Both ${Math.round(sc.both * 100)}% → using ${METHOD_NAME[draft.method!]}${draft.method !== 'sound' ? ` (sides add about ${motion.lagMs} ms of lag${motion.lagMs > 120 ? ': your browser delivers motion late' : ''})` : ''}`
     : `Sound ${Math.round(sc.sound * 100)}% · motion sensor: ${Math.round(motion.rate)} readings/s (too few for sides)`;
@@ -461,7 +471,7 @@ async function onHeard(feat: number[], peak: number, frame: number) {
   const mf = sideCls ? await motion.featuresAfter(tapAt) : null;
   const base = mainCls.classify(feat, peak, { zone: 0, knuckle: false, velocity: 0, confidence: 0 });
   const side = sideCls?.classify(feat, mf);
-  const zone = side ? side.zone : base.zone;
+  const zone = side ? (side.confidence < 0.5 ? -1 : side.zone) : base.zone; // unclear → play nothing
   if (zone < 0) { if (debugLog.length < 2000 && location.search.includes('debug')) debugLog.push({ type: 'unsure', frame, at: Math.round(performance.now()) }); return onUnsure(); }
   engine.play(zone * 2 + (base.knuckle ? 1 : 0), base.velocity, frame);
   if (debugLog.length < 2000 && location.search.includes('debug')) debugLog.push({ type: 'tap', zone, knuckle: base.knuckle, velocity: base.velocity, confidence: side?.confidence ?? base.confidence, frame, via: sideCls?.method, at: Math.round(performance.now()) });

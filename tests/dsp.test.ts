@@ -34,9 +34,14 @@ for (const sr of [44100, 48000]) describe(`DSP at ${sr} Hz`, () => {
     const testF = fingers.filter(m => !cal.includes(m)), testK = knuckles.filter(m => !calK.includes(m));
     const zoneAcc = testF.filter(m => c.classify(m.tp.feat, m.tp.peak, out).zone === m.tr!.zone).length / testF.length;
     const typeAcc = [...testF, ...testK].filter(m => c.classify(m.tp.feat, m.tp.peak, out).knuckle === m.tr!.knuckle).length / (testF.length + testK.length);
-    const knZoneAcc = testK.filter(m => c.classify(m.tp.feat, m.tp.peak, out).zone === m.tr!.zone).length / testK.length;
+    // knuckle taps: some are now left silent when unclear; what matters is few WRONG sounds and most taps played
+    const knRes = testK.map(m => c.classify(m.tp.feat, m.tp.peak, out).zone);
+    const knWrong = knRes.filter((z, i) => z >= 0 && z !== testK[i].tr!.zone).length / testK.length;
+    const knPlayed = knRes.filter(z => z >= 0).length / testK.length;
+    console.log(`DSPTEST knuckle: wrong ${(knWrong * 100).toFixed(0)}%, played ${(knPlayed * 100).toFixed(0)}%`);
     expect(zoneAcc).toBeGreaterThan(0.85);
-    expect(knZoneAcc).toBeGreaterThan(0.65); // 2 knuckle calibration taps per zone
+    expect(knWrong).toBeLessThan(0.3);
+    expect(knPlayed).toBeGreaterThan(0.6);
     expect(typeAcc).toBeGreaterThan(0.9);
   });
 
