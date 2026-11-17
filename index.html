@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0b0f" />
+  <meta name="description" content="Put your phone on a table. Tap the table. It plays. No install, nothing leaves your phone." />
+  <title>BenchPress — tap the table, make music</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b0b0f'/%3E%3Ccircle cx='16' cy='32' r='7' fill='%233d8bff'/%3E%3Ccircle cx='32' cy='16' r='7' fill='%23ff4d6d'/%3E%3Ccircle cx='48' cy='32' r='7' fill='%23ffc93d'/%3E%3Ccircle cx='32' cy='48' r='7' fill='%233ddc97'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <canvas id="fx" aria-hidden="true"></canvas>
+
+  <!-- LANDING -->
+  <section class="screen" data-screen="landing">
+    <div class="brand"><span class="logo-dots"><i></i><i></i><i></i><i></i></span>BenchPress</div>
+    <div class="demo" aria-hidden="true">
+      <div class="demo-table"><div class="demo-phone"></div><b class="d0"></b><b class="d1"></b><b class="d2"></b><b class="d3"></b><span class="demo-finger"></span></div>
+    </div>
+    <h1>Your table is an instrument.</h1>
+    <p class="lead">Put your phone on a table. Tap the table. It plays.</p>
+    <div id="inapp-warning" class="warn hidden">
+      <b>Open this in Chrome or Safari.</b> In-app browsers (Instagram and others) block the microphone.
+      <button class="ghost small" id="copy-link">Copy link</button>
+    </div>
+    <div id="unsupported" class="warn hidden"></div>
+    <button class="primary" id="try">Try it</button>
+    <p class="fine">No install · nothing leaves your phone · best on a hard table</p>
+    <nav class="links"><button class="link" data-open="help">Help</button><button class="link" data-open="privacy">Privacy</button></nav>
+  </section>
+
+  <!-- DESKTOP GATE -->
+  <section class="screen" data-screen="desktop">
+    <div class="brand"><span class="logo-dots"><i></i><i></i><i></i><i></i></span>BenchPress</div>
+    <h1>Open this on your phone.</h1>
+    <p class="lead">BenchPress listens to your table through the phone's microphone. Scan this:</p>
+    <div id="qr" class="qr"></div>
+    <p class="fine" id="qr-url"></p>
+    <button class="ghost" id="laptop-anyway">Try on this laptop anyway</button>
+  </section>
+
+  <!-- PERMISSION -->
+  <section class="screen" data-screen="permission">
+    <div class="big-icon">🎤</div>
+    <h2>Tap Allow so your table can hear you.</h2>
+    <p class="lead">Sound is processed on your phone and never recorded or uploaded.</p>
+    <button class="primary" id="allow">Allow microphone</button>
+    <div id="mic-error" class="warn hidden"></div>
+  </section>
+
+  <!-- FLAT CHECK -->
+  <section class="screen" data-screen="flat">
+    <div class="tilt"><div class="tilt-phone" id="tilt-phone"></div></div>
+    <h2>Lay me flat on a table.</h2>
+    <p class="lead" id="flat-hint">Screen up, in the middle of a hard table.</p>
+    <button class="primary hidden" id="orient-permission">Enable tilt sensor</button>
+    <button class="ghost hidden" id="flat-manual">It's flat</button>
+  </section>
+
+  <!-- WELCOME BACK -->
+  <section class="screen" data-screen="welcome">
+    <h2>Same table as last time?</h2>
+    <div id="table-list" class="list"></div>
+    <button class="ghost" id="new-table">New table</button>
+  </section>
+
+  <!-- FIRST TAP -->
+  <section class="screen" data-screen="first">
+    <div class="ring" id="ring"></div>
+    <h2 id="first-title">Checking the speaker…</h2>
+    <p class="lead" id="first-sub">One click, so I know how fast your phone is.</p>
+  </section>
+
+  <!-- CALIBRATION -->
+  <section class="screen" data-screen="calibrate">
+    <div class="cal-map" id="cal-map">
+      <div class="cal-phone"></div>
+      <b data-z="0"></b><b data-z="1"></b><b data-z="2"></b><b data-z="3"></b>
+    </div>
+    <h2 id="cal-title">Tap where <span id="cal-color">blue</span> lives.</h2>
+    <div class="dots" id="cal-dots"></div>
+    <p class="lead" id="cal-sub">Pick a spot about a hand away from the phone. Every tap already plays.</p>
+    <button class="link" id="cal-cancel">Cancel</button>
+  </section>
+
+  <!-- CALIBRATION DONE -->
+  <section class="screen" data-screen="caldone">
+    <h2 id="done-title">You're an instrument now.</h2>
+    <div class="quality"><div class="quality-bar"><i id="quality-fill"></i></div><span id="quality-text"></span></div>
+    <p class="lead" id="quality-tip"></p>
+    <label class="field">Name this table <input id="table-name" maxlength="28" value="My table" /></label>
+    <button class="primary" id="go-play">Play</button>
+    <button class="ghost" id="redo-cal">Redo calibration</button>
+  </section>
+
+  <!-- PLAY -->
+  <section class="screen play" data-screen="play">
+    <header class="topbar">
+      <div class="listen"><i id="listen-dot"></i><span id="listen-text">listening</span></div>
+      <button class="icon" id="open-settings" aria-label="Settings">⚙︎</button>
+    </header>
+    <div class="banner hidden" id="banner"><span id="banner-text"></span><button class="small" id="banner-action"></button><button class="small ghost" id="banner-close">✕</button></div>
+    <div class="pads" id="pads">
+      <div class="pad" data-z="0"><span class="pf"></span><span class="pk"></span></div>
+      <div class="pad" data-z="1"><span class="pf"></span><span class="pk"></span></div>
+      <div class="pad" data-z="2"><span class="pf"></span><span class="pk"></span></div>
+      <div class="pad" data-z="3"><span class="pf"></span><span class="pk"></span></div>
+    </div>
+    <div class="chips" id="instruments"></div>
+    <footer class="loopbar">
+      <button class="rec" id="loop-btn" aria-label="Loop"><i></i></button>
+      <div class="loop-text" id="loop-text">Loop: tap ● to record</div>
+      <button class="small ghost" id="loop-clear">Clear</button>
+    </footer>
+  </section>
+
+  <!-- KNUCKLE UNLOCK (overlay) -->
+  <div class="overlay hidden" id="knuckle">
+    <div class="sheet">
+      <div class="big-icon">✊</div>
+      <h2>Knock <span id="kn-color">blue</span> with a knuckle.</h2>
+      <p class="lead">Two knuckle knocks on each of your spots. Then every spot has a second sound.</p>
+      <div class="dots" id="kn-dots"></div>
+      <button class="link" id="kn-cancel">Not now</button>
+    </div>
+  </div>
+
+  <!-- SETTINGS (drawer) -->
+  <div class="overlay hidden" id="settings">
+    <div class="sheet drawer">
+      <div class="sheet-head"><h2>Settings</h2><button class="icon" data-close>✕</button></div>
+      <label class="row">Sensitivity <input type="range" id="sens" min="0" max="10" step="1" /></label>
+      <label class="row toggle">Headphones mode <input type="checkbox" id="headphones" /></label>
+      <p class="fine">Use with wired headphones or a speaker away from the table. Bluetooth adds lag.</p>
+      <div class="row">Speed (tap to sound) <b id="latency-val">—</b> <button class="small ghost" id="latency-test">Test</button></div>
+      <h3>Tables</h3>
+      <div id="settings-tables" class="list"></div>
+      <div class="row-buttons">
+        <button class="small" id="retune">Quick re-tune</button>
+        <button class="small ghost" id="recalibrate">Full recalibration</button>
+        <button class="small ghost" id="reknuckle">Retrain knuckle</button>
+      </div>
+      <h3>About</h3>
+      <div class="row-buttons"><button class="small ghost" data-open="help">Help</button><button class="small ghost" data-open="privacy">Privacy</button></div>
+      <details class="debug"><summary>Debug</summary><pre id="debug"></pre></details>
+    </div>
+  </div>
+
+  <!-- HELP -->
+  <div class="overlay hidden" id="help">
+    <div class="sheet">
+      <div class="sheet-head"><h2>Help</h2><button class="icon" data-close>✕</button></div>
+      <h3>It doesn't hear my taps</h3>
+      <p>Use a hard table (wood, laminate). Take off a thick phone case. Tap firmly, about a hand away from the phone. Raise Sensitivity in settings.</p>
+      <h3>It plays the wrong sound</h3>
+      <p>Hit the same spot each time, the size of a coin. If the phone moved, do a Quick re-tune. Spots far apart work best.</p>
+      <h3>It feels laggy</h3>
+      <p>Use Chrome on Android. Bluetooth headphones add a lot of delay; use the phone speaker or wired headphones.</p>
+      <h3>Phantom taps while a loop plays</h3>
+      <p>The phone hears its own speaker. Turn the volume down, or plug in headphones and switch on Headphones mode.</p>
+      <h3>The microphone is blocked</h3>
+      <p>Tap the lock icon in the address bar and allow the microphone, then reload. Inside Instagram or other apps, open the link in Chrome or Safari.</p>
+      <h3>iPhone</h3>
+      <p>iPhone support is beta. Turn off silent mode, or you may hear nothing.</p>
+    </div>
+  </div>
+
+  <!-- PRIVACY -->
+  <div class="overlay hidden" id="privacy">
+    <div class="sheet">
+      <div class="sheet-head"><h2>Privacy</h2><button class="icon" data-close>✕</button></div>
+      <p>BenchPress listens to the microphone only to detect taps. Sound is analysed on your phone, a few milliseconds at a time, and immediately discarded. Nothing is recorded, stored or uploaded.</p>
+      <p>Your table calibrations are saved in this browser only. There are no accounts, no tracking cookies and no server.</p>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

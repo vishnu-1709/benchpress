@@ -1,0 +1,23 @@
+{
+  "name": "benchpress",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Tap the table. Make music. A phone on a table turns any hard surface into an instrument.",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "e2e": "node tools/e2e/make_wav.mjs && vite build && (vite preview --port 4173 & sleep 2 && python3 tools/e2e/run.py; kill %1)"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vite": "^6.4.6",
+    "vitest": "^3.2.7"
+  },
+  "dependencies": {
+    "qrcode-generator": "^2.0.4"
+  }
+}
