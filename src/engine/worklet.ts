@@ -35,7 +35,7 @@ class BenchpressProcessor extends AudioWorkletProcessor {
   private evSkip = new Uint8Array(MAX_LOOP_EVENTS); private evN = 0;
   // latency test
   private latTestAt = -1; private click: Float32Array;
-  private levelEvery = Math.round(sampleRate / 30); private levelAcc = 0;
+  private levelEvery = Math.round(sampleRate / 30); private levelAcc = 0; private statsTick = 0;
   private onTapBound = (o: Onset) => this.onTap(o);
   // raw recording for analysis (allocates, but only while recording; no sounds play then)
   private recOn = false; private recBuf: Float32Array[] = []; private recN = 0;
@@ -213,7 +213,14 @@ class BenchpressProcessor extends AudioWorkletProcessor {
     for (let i = 0; i < n; i++) { const x = out[i]; out[i] = x > 1 ? 1 : x < -1 ? -1 : x; } // hard safety clip
     for (let c = 1; c < outputs[0].length; c++) outputs[0][c].set(out);
     this.levelAcc += n;
-    if (this.levelAcc >= this.levelEvery) { this.levelAcc = 0; this.post({ type: 'level', rms: this.det.lastRms }); }
+    if (this.levelAcc >= this.levelEvery) {
+      this.levelAcc = 0; this.post({ type: 'level', rms: this.det.lastRms });
+      if (++this.statsTick % 30 === 0) {
+        const d = this.det as any;
+        this.post({ type: 'stats', echoDelayMs: d.echoDelayMs, echoLearned: d.echoDelayLearned, quietSpeaker: d.quietSpeaker, leak: d.leak,
+          echoesRejected: d.echoesRejected, tooQuiet: d.tooQuiet, noise: d.noise, minLevel: d.minLevel, onsets: d.onsets });
+      }
+    }
     return true;
   }
 }

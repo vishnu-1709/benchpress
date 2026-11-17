@@ -75,7 +75,7 @@ h3 { font-size: 14px; font-weight: 600; margin-top: 14px; }
 /* calibration */
 .cal-map { position: relative; width: 210px; height: 210px; }
 .cal-phone { position: absolute; left: 50%; top: 50%; width: 46px; height: 88px; transform: translate(-50%, -50%); border-radius: 10px; border: 3px solid #555; }
-.cal-map b { position: absolute; width: 34px; height: 34px; border-radius: 50%; transform: translate(-50%, -50%); opacity: .25; transition: opacity .2s; }
+.cal-map b { position: absolute; width: 52px; height: 52px; border-radius: 50%; transform: translate(-50%, -50%); opacity: .25; transition: opacity .2s; }
 .cal-map b[data-z="0"] { left: 8%; top: 50%; background: var(--z0); } .cal-map b[data-z="1"] { left: 50%; top: 6%; background: var(--z1); }
 .cal-map b[data-z="2"] { left: 92%; top: 50%; background: var(--z2); } .cal-map b[data-z="3"] { left: 50%; top: 94%; background: var(--z3); }
 .cal-map b.now { opacity: 1; animation: pulse 1s infinite; } .cal-map b.done { opacity: .8; }

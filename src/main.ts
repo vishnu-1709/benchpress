@@ -43,6 +43,7 @@ const prefs = store.get('benchpress.prefs', { pack: 'drums', headphones: false, 
 const savePrefs = () => store.set('benchpress.prefs', prefs);
 let profile: TableProfile | null = null;
 let latencyMs: number | null = null;
+let lastStats: Extract<FromWorklet, { type: 'stats' }> | null = null;
 let baselineTilt: Tilt | null = null;
 const loadedPacks = new Set<string>();
 // sensitivity 0..10: higher = softer taps count (and more risk of noise)
@@ -108,6 +109,7 @@ listeners.push(m => {
   if (m.type === 'calTap') onCalTap(m.feat, m.peak, m.rms);
   if (m.type === 'loop') renderLoop(m.phase, m.layers);
   if (m.type === 'loopFull') toast('Loop is full');
+  if (m.type === 'stats') lastStats = m;
   if (m.type === 'latency' && m.ms != null) latencyMs = m.ms;
 });
 
@@ -227,7 +229,7 @@ function onFirstTap(vel: number) {
   fx.burst(ring.left + ring.width / 2, ring.top + ring.height / 2, '#ffffff', vel);
   setMode({ kind: 'idle' });
   $('#first-title').textContent = 'There it is.';
-  $('#first-sub').textContent = 'Now let\'s teach it four spots.';
+  $('#first-sub').textContent = 'Now let\'s teach it four areas.';
   setTimeout(() => startCalibration('full'), 1100);
 }
 
@@ -254,11 +256,11 @@ async function startCalibration(kind: CalKind) {
   calFloor = Math.max(DEFAULT_CONFIG.minLevel, 5 * room);
   engine.setConfig({ ...config(), minLevel: kind === 'full' ? calFloor : Math.max(calFloor, config().minLevel) });
   $('#cal-floor').style.left = `${meterPos(calFloor) * 100}%`;
-  $('#cal-title').innerHTML = 'Tap where <span id="cal-color">blue</span> lives.';
+  $('#cal-title').innerHTML = 'Tap around the <span id="cal-color">blue</span> area.';
   $('#cal-sub').textContent = kind === 'full'
-    ? 'Pick a spot about a hand away from the phone. Tap firmly, one tap at a time. I stay silent while I listen.'
-    : 'Two taps on each spot you already use.';
-  cal = { kind, zone: 0, per: kind === 'full' ? 5 : 2, taps: [] };
+    ? 'Tap around a palm-sized area a hand away from the phone. Move your finger a little each time, one tap at a time.'
+    : 'Three taps around each area you already use.';
+  cal = { kind, zone: 0, per: kind === 'full' ? 8 : 3, taps: [] };
   setCalZone(0);
 }
 /** Level meter position, log scale from -80 dB to 0 dB. */
@@ -308,10 +310,10 @@ function finishCalibration() {
   const q = qualityOf(cal.taps);
   ($('#quality-fill') as HTMLElement).style.width = `${Math.round(q * 100)}%`;
   $('#quality-text').textContent = `${Math.round(q * 100)}% match`;
-  $('#done-title').textContent = q >= 0.8 ? 'You\'re an instrument now.' : 'Close. Your spots sound a bit alike.';
+  $('#done-title').textContent = q >= 0.8 ? 'You\'re an instrument now.' : 'Close. Your areas sound a bit alike.';
   $('#quality-tip').textContent = q >= 0.8
-    ? 'Every spot sounds different enough. Keep the phone where it is.'
-    : 'Try spots further apart, tap with a fingernail, or use a harder table. You can still play.';
+    ? 'Every area sounds different enough. Keep the phone where it is.'
+    : 'Keep the four areas further apart, tap with a fingernail, or use a harder table. You can still play.';
   const n = profiles.all().length;
   ($('#table-name') as HTMLInputElement).value = n ? `Table ${n + 1}` : 'My table';
   show('caldone');
@@ -474,6 +476,7 @@ function renderSettings() {
     `round trip: ${latencyMs == null ? '—' : Math.round(latencyMs) + ' ms'}`,
     `table: ${profile ? `${profile.name}, ${profile.zoneTaps.length} taps, ${Math.round(profile.quality * 100)}%` : '—'}`,
     `tap floor: ${config().minLevel.toFixed(4)} (typical tap ${(profile && typicalTapRms(profile.zoneTaps))?.toFixed(4) ?? '—'})`,
+    `engine: ${lastStats ? `onsets ${lastStats.onsets}, echoes ignored ${lastStats.echoesRejected}, too quiet ${lastStats.tooQuiet}, echo delay ${lastStats.echoDelayMs == null ? '?' : Math.round(lastStats.echoDelayMs) + ' ms' + (lastStats.echoLearned ? ' (learned)' : '')}, speaker ${lastStats.quietSpeaker ? 'not heard' : 'heard'}, leak ${lastStats.leak.toFixed(2)}, noise ${lastStats.noise.toFixed(4)}, floor ${lastStats.minLevel.toFixed(4)}` : '—'}`,
     `tilt: ${JSON.stringify(currentTilt())}`, `iOS: ${isIOS} · UA: ${navigator.userAgent}`,
   ].join('\n');
 }

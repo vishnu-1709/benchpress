@@ -54,4 +54,5 @@ export type FromWorklet =
   | { type: 'loop'; phase: LoopPhase; lengthSec: number; layers: number }
   | { type: 'latency'; ms: number | null; leak: number }
   | { type: 'loopFull' }
+  | { type: 'stats'; echoDelayMs: number | null; echoLearned: boolean; quietSpeaker: boolean; leak: number; echoesRejected: number; tooQuiet: number; noise: number; minLevel: number; onsets: number }
   | { type: 'rec'; channels: Float32Array[] };            // raw mic chunk while recording (both channels)

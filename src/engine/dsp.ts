@@ -49,6 +49,9 @@ export class TapDetector {
   private echoMargin = 1.5;      // outside attack windows, a tap must be this much louder than the expected echo
   /** How many onsets were rejected as echoes (debug / tests). */
   echoesRejected = 0;
+  /** Onsets dropped for being under the tap floor, and onsets accepted (debug). */
+  tooQuiet = 0; onsets = 0;
+  get minLevel() { return this.cfg.minLevel; }
   /** Echo delay (ms): measured or learned, null if unknown. */
   get echoDelayMs() { return this.delayMs; }
   get echoDelayLearned() { return this.delayLearned; }
@@ -180,7 +183,9 @@ export class TapDetector {
         // while our own sound rings, a tap only adds to it: ask for a smaller jump
         const ringing = this.gate && this.outEnv[(this.outFrames - 1) & 1023] > 0.003;
         const needRise = ringing ? Math.min(rise, 3) : rise;
-        if (this.pendingOnset < 0 && rms > this.noise * threshold && rms > past * needRise && rms > minLevel && since > refractoryMs) {
+        const looksLikeOnset = this.pendingOnset < 0 && rms > this.noise * threshold && rms > past * needRise && since > refractoryMs;
+        if (looksLikeOnset && rms <= minLevel) { this.tooQuiet++; this.lastOnset = this.total; continue; }
+        if (looksLikeOnset) {
           this.lastOnset = this.total;
           if (this.gate) {
             const f = this.hi - 1, lvl = this.echoLevel(f);
@@ -193,7 +198,7 @@ export class TapDetector {
             }
             if (rms < this.echoMargin * this.leak * lvl) { this.echoesRejected++; continue; } // not louder than our own echo
           }
-          this.pendingOnset = this.total - this.hop; this.pendingRms = rms;
+          this.pendingOnset = this.total - this.hop; this.pendingRms = rms; this.onsets++;
           this.pendingDue = this.pendingOnset + this.winN - this.preN;
         }
       }

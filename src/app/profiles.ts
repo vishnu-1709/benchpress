@@ -21,7 +21,7 @@ export interface TableProfile {
 const KEY = 'benchpress.tables.v1';
 interface Saved { tables: TableProfile[]; lastId: string | null }
 
-const MAX_PER_ZONE = 8; // keep calibration small and fresh: newest taps win
+const MAX_PER_ZONE = 12; // enough to cover a palm-sized area; newest taps win
 
 export function buildModel(p: Pick<TableProfile, 'zoneTaps' | 'knuckleTaps'>): TableModel {
   const feats = p.zoneTaps.map(t => t.feat), labels = p.zoneTaps.map(t => t.zone);
