@@ -4,7 +4,9 @@ const sr = 48000, dur = 64, x = new Float32Array(sr * dur);
 let s = 42; const rnd = () => { s = (s * 1664525 + 1013904223) % 4294967296; return s / 4294967296; };
 for (let i = 0; i < x.length; i++) x[i] = (rnd() * 2 - 1) * 0.003;
 const modes = Array.from({ length: 18 }, () => ({ f: 150 + rnd() * 9000, d: 30 + rnd() * 250 }));
-const W = Array.from({ length: 4 }, () => modes.map(() => 0.2 + rnd()));
+const SAME = process.env.SAME_SOUND === '1';
+const W0 = modes.map(() => 0.2 + rnd());
+const W = Array.from({ length: 4 }, () => SAME ? W0 : modes.map(() => 0.2 + rnd())); // SAME_SOUND=1: every side sounds alike
 const truth = [];
 function tap(sec, z, kn = false) {
   const t = Math.round(sec * sr), force = 0.3 + 0.7 * rnd(), n = Math.round(sr * 0.12);

@@ -3,7 +3,7 @@ import { DSP_VERSION, type TableModel } from '../engine/protocol';
 import { rejectDistance, surfaceQuality } from '../engine/dsp';
 import { store, type Tilt } from './env';
 
-export interface CalTap { zone: number; feat: number[]; peak: number; rms?: number }
+export interface CalTap { zone: number; feat: number[]; peak: number; rms?: number; motion?: number[] | null; at?: number }
 
 export interface TableProfile {
   v: 1;
@@ -15,7 +15,10 @@ export interface TableProfile {
   tilt: Tilt | null;
   zoneTaps: CalTap[];      // finger taps with their zone
   knuckleTaps: CalTap[];   // knuckle taps, 2 per zone
-  quality: number;         // leave-one-out zone accuracy 0..1
+  quality: number;         // leave-one-out accuracy of the chosen method 0..1
+  method?: 'sound' | 'motion' | 'both';
+  scores?: { sound: number; motion: number; both: number };
+  motionOffset?: number;   // learned audio→motion clock shift (ms)
 }
 
 const KEY = 'benchpress.tables.v1';

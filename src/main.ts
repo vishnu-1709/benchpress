@@ -7,7 +7,10 @@ import { PACKS, packById, renderPack } from './sounds/packs';
 import { Fx } from './ui/fx';
 import { Recorder } from './app/recorder';
 import { Inspector } from './ui/inspect';
-import { buildModel, mergeTaps, profiles, qualityOf, typicalTapRms, type CalTap, type TableProfile } from './app/profiles';
+import { motion } from './app/motion';
+import { chooseMethod, SideClassifier, type Method } from './app/sides';
+import { TapClassifier } from './engine/dsp';
+import { buildModel, mergeTaps, profiles, typicalTapRms, type CalTap, type TableProfile } from './app/profiles';
 import {
   currentTilt, inAppBrowser, isFlat, isIOS, isMobile, keepAwake, micSupported, needsOrientationPermission,
   onTilt, secure, startOrientation, store, tiltDelta, type Tilt,
@@ -58,6 +61,23 @@ const config = () => {
 const applyConfig = () => engine.setConfig(config());
 
 function setMode(m: Mode) { engine.setMode(m); }
+/** Play mode: sound-only tables are classified inside the audio thread (no lag); sides with motion are decided here. */
+const playMode = (): Mode => ({ kind: 'play', external: !!profile?.method && profile.method !== 'sound' });
+
+// ---------- choosing sound / motion / both for a table ----------
+function decideMethod(p: TableProfile) {
+  const ch = chooseMethod([...p.zoneTaps, ...p.knuckleTaps]);
+  p.method = ch.method; p.scores = ch.scores; p.quality = ch.scores[ch.method];
+}
+let sideCls: SideClassifier | null = null, mainCls: TapClassifier | null = null;
+function setTable(p: TableProfile) {
+  profile = p;
+  const model = buildModel(p);
+  engine.setModel(model); applyConfig();
+  mainCls = new TapClassifier(model);
+  sideCls = p.method && p.method !== 'sound' ? new SideClassifier([...p.zoneTaps, ...p.knuckleTaps], p.method) : null;
+}
+const METHOD_NAME: Record<Method, string> = { sound: 'sound', motion: 'motion', both: 'sound + motion' };
 
 function ensurePack(id: string) {
   const p = packById(id);
@@ -107,7 +127,8 @@ listeners.push(m => {
   }
   if (m.type === 'tap') onPlayTap(m.zone, m.knuckle, m.velocity);
   if (m.type === 'unsure') onUnsure();
-  if (m.type === 'calTap') onCalTap(m.feat, m.peak, m.rms);
+  if (m.type === 'calTap') onCalTap(m.feat, m.peak, m.rms, m.frame);
+  if (m.type === 'heard') onHeard(m.feat, m.peak, m.frame);
   if (m.type === 'loop') renderLoop(m.phase, m.layers);
   if (m.type === 'loopFull') toast('Loop is full');
   if (m.type === 'stats') lastStats = m;
@@ -139,6 +160,7 @@ $('#allow').addEventListener('click', async () => {
   const err = $('#mic-error'); err.classList.add('hidden');
   try {
     if (!engine.running) await engine.startMic();
+    motion.start();
     engine.setConfig(config());
     engine.setHeadphones(prefs.headphones);
     selectPack(prefs.pack);
@@ -204,8 +226,9 @@ function renderWelcome(saved: TableProfile[]) {
 }
 $('#new-table').addEventListener('click', startFirstTap);
 function useProfile(t: TableProfile) {
-  profile = t; profiles.use(t.id);
-  engine.setModel(buildModel(t)); applyConfig();
+  profiles.use(t.id); if (!t.method) decideMethod(t);
+  if (t.motionOffset != null && !motion.offsetLearned) { motion.offset = t.motionOffset; motion.offsetLearned = true; }
+  setTable(t);
   enterPlay();
   showBanner('Phone in a new spot? A quick re-tune helps.', 'Re-tune', () => startCalibration('quick'));
 }
@@ -230,7 +253,7 @@ function onFirstTap(vel: number) {
   fx.burst(ring.left + ring.width / 2, ring.top + ring.height / 2, '#ffffff', vel);
   setMode({ kind: 'idle' });
   $('#first-title').textContent = 'There it is.';
-  $('#first-sub').textContent = 'Now let\'s teach it four areas.';
+  $('#first-sub').textContent = 'Now let\'s teach it the four sides.';
   setTimeout(() => startCalibration('full'), 1100);
 }
 
@@ -257,10 +280,10 @@ async function startCalibration(kind: CalKind) {
   calFloor = Math.max(DEFAULT_CONFIG.minLevel, 5 * room);
   engine.setConfig({ ...config(), minLevel: kind === 'full' ? calFloor : Math.max(calFloor, config().minLevel) });
   $('#cal-floor').style.left = `${meterPos(calFloor) * 100}%`;
-  $('#cal-title').innerHTML = 'Tap around the <span id="cal-color">blue</span> area.';
+  $('#cal-title').innerHTML = 'Tap along the <span id="cal-color">blue</span> side.';
   $('#cal-sub').textContent = kind === 'full'
-    ? 'Tap around a palm-sized area a hand away from the phone. Move your finger a little each time, one tap at a time.'
-    : 'Three taps around each area you already use.';
+    ? 'Spread 8 taps along that side of the phone, a hand away. Mix soft and firm, one tap at a time.'
+    : 'Three taps along each side.';
   cal = { kind, zone: 0, per: kind === 'full' ? 8 : 3, taps: [] };
   setCalZone(0);
 }
@@ -278,8 +301,22 @@ function renderDots(sel: string, n: number, filled: number, col: string) {
   const d = $(sel); d.innerHTML = '';
   for (let i = 0; i < n; i++) { const s = document.createElement('span'); if (i < filled) s.style.background = col; d.appendChild(s); }
 }
-function onCalTap(feat: number[], peak: number, rms: number) {
-  if (knuckleCal) return onKnuckleTap(feat, peak, rms);
+const pendingMotion: Promise<unknown>[] = [];
+/** Remember when this tap happened (page clock); motion features are cut out once the clock shift is known. */
+function withMotion(tap: CalTap, frame: number) {
+  tap.at = engine.frameToPerf(frame);
+  pendingMotion.push(new Promise(r => setTimeout(r, 250))); // let late motion readings arrive
+}
+/** Learn the audio→motion clock shift from these taps (if possible) and attach motion features to all of them. */
+function attachMotion(taps: CalTap[]) {
+  const times = taps.map(t => t.at).filter((t): t is number => t != null);
+  // learn the clock shift from a full calibration (16+ taps); smaller sets reuse it
+  if (motion.usable && (times.length >= 16 || (!motion.offsetLearned && times.length >= 8))) motion.learnOffset(times);
+  for (const t of taps) t.motion = t.at != null && motion.usable && motion.offsetLearned ? motion.featuresAround(t.at) : null;
+  if (debugLog.length < 2000 && location.search.includes('debug')) debugLog.push({ type: 'motionDbg', offset: motion.offset, learned: motion.offsetLearned, rate: motion.rate });
+}
+function onCalTap(feat: number[], peak: number, rms: number, frame: number) {
+  if (knuckleCal) return onKnuckleTap(feat, peak, rms, frame);
   if (!cal || screen !== 'calibrate') return;
   const z = cal.zone, now = performance.now();
   // only deliberate taps: not too close together, not much quieter than the taps so far
@@ -287,7 +324,7 @@ function onCalTap(feat: number[], peak: number, rms: number) {
   const peaks = cal.taps.map(t => t.peak).sort((a, b) => a - b);
   if (peaks.length >= 2 && peak < 0.3 * peaks[Math.floor(peaks.length / 2)]) return;
   lastCalAt = now;
-  cal.taps.push({ zone: z, feat, peak, rms });
+  const tap: CalTap = { zone: z, feat, peak, rms }; cal.taps.push(tap); withMotion(tap, frame);
   const n = cal.taps.filter(t => t.zone === z).length;
   renderDots('#cal-dots', cal.per, n, COLORS[z]);
   const dot = document.querySelector(`#cal-map b[data-z="${z}"]`)!.getBoundingClientRect();
@@ -299,22 +336,29 @@ function onCalTap(feat: number[], peak: number, rms: number) {
 }
 $('#cal-cancel').addEventListener('click', () => { cal = null; profile ? enterPlay() : show('landing'); });
 
-function finishCalibration() {
+async function finishCalibration() {
   if (!cal) return;
+  await Promise.all(pendingMotion.splice(0));
+  attachMotion(cal.kind === 'quick' && profile ? [...profile.zoneTaps.filter(t => t.at && !t.motion), ...cal.taps] : cal.taps);
   if (cal.kind === 'quick' && profile) {
     profile.zoneTaps = mergeTaps(profile.zoneTaps, cal.taps);
-    profile.quality = qualityOf(profile.zoneTaps); profile.tilt = currentTilt();
-    profiles.save(profile); engine.setModel(buildModel(profile)); applyConfig();
-    cal = null; enterPlay(); toast(`Re-tuned · ${Math.round(profile.quality * 100)}% match`);
+    decideMethod(profile); profile.tilt = currentTilt();
+    profiles.save(profile); setTable(profile);
+    cal = null; enterPlay(); toast(`Re-tuned · ${Math.round(profile.quality * 100)}% using ${METHOD_NAME[profile.method ?? 'sound']}`);
     return;
   }
-  const q = qualityOf(cal.taps);
+  const draft = profiles.create('draft', engine.sampleRate, null, cal.taps, profile?.knuckleTaps ?? []);
+  decideMethod(draft);
+  const q = draft.quality, sc = draft.scores!;
+  $('#method-text').textContent = motion.usable
+    ? `Sound ${Math.round(sc.sound * 100)}% · Motion ${Math.round(sc.motion * 100)}% · Both ${Math.round(sc.both * 100)}% → using ${METHOD_NAME[draft.method!]}${draft.method !== 'sound' ? ` (sides add about ${motion.lagMs} ms of lag${motion.lagMs > 120 ? ': your browser delivers motion late' : ''})` : ''}`
+    : `Sound ${Math.round(sc.sound * 100)}% · motion sensor: ${Math.round(motion.rate)} readings/s (too few for sides)`;
   ($('#quality-fill') as HTMLElement).style.width = `${Math.round(q * 100)}%`;
   $('#quality-text').textContent = `${Math.round(q * 100)}% match`;
-  $('#done-title').textContent = q >= 0.8 ? 'You\'re an instrument now.' : 'Close. Your areas sound a bit alike.';
+  $('#done-title').textContent = q >= 0.8 ? 'You\'re an instrument now.' : 'Close. Some sides get mixed up.';
   $('#quality-tip').textContent = q >= 0.8
-    ? 'Every area sounds different enough. Keep the phone where it is.'
-    : 'Keep the four areas further apart, tap with a fingernail, or use a harder table. You can still play.';
+    ? 'Every side is clear enough. Keep the phone where it is.'
+    : 'Tap firmly, a bit further from the phone, on a hard table. Redo calibration to try again. You can still play.';
   const n = profiles.all().length;
   ($('#table-name') as HTMLInputElement).value = n ? `Table ${n + 1}` : 'My table';
   show('caldone');
@@ -322,8 +366,9 @@ function finishCalibration() {
 $('#go-play').addEventListener('click', () => {
   if (!cal) return;
   const name = ($('#table-name') as HTMLInputElement).value.trim() || 'My table';
-  profile = profiles.create(name, engine.sampleRate, currentTilt(), cal.taps, profile?.knuckleTaps ?? []);
-  profiles.save(profile); engine.setModel(buildModel(profile)); applyConfig();
+  const p = profiles.create(name, engine.sampleRate, currentTilt(), cal.taps, profile?.knuckleTaps ?? []);
+  p.motionOffset = motion.offsetLearned ? motion.offset : undefined;
+  decideMethod(p); profiles.save(p); setTable(p);
   cal = null; enterPlay();
 });
 $('#redo-cal').addEventListener('click', () => startCalibration('full'));
@@ -341,28 +386,31 @@ function setKnZone(z: number) {
   renderDots('#kn-dots', KN_PER, 0, COLORS[z]);
   setMode({ kind: 'calibrateKnuckle', zone: z });
 }
-function onKnuckleTap(feat: number[], peak: number, rms: number) {
+async function onKnuckleTap(feat: number[], peak: number, rms: number, frame: number) {
   if (!knuckleCal || !profile) return;
   const now = performance.now(); if (now - lastCalAt < 250) return; lastCalAt = now;
-  knuckleCal.push({ zone: knZone, feat, peak, rms });
+  const kt: CalTap = { zone: knZone, feat, peak, rms }; knuckleCal.push(kt); withMotion(kt, frame);
   const n = knuckleCal.filter(t => t.zone === knZone).length;
   renderDots('#kn-dots', KN_PER, n, COLORS[knZone]);
   fx.burst(innerWidth / 2, innerHeight * 0.4, COLORS[knZone], 0.7, true);
   if (n < KN_PER) return;
   if (knZone < 3) { setMode({ kind: 'idle' }); setTimeout(() => setKnZone(knZone + 1), 300); return; }
-  profile.knuckleTaps = knuckleCal; knuckleCal = null;
-  profiles.save(profile); engine.setModel(buildModel(profile));
-  closeOverlay('knuckle'); setMode({ kind: 'play' }); renderPads();
+  const kn = knuckleCal; knuckleCal = null;
+  await Promise.all(pendingMotion.splice(0));
+  attachMotion(kn);
+  profile.knuckleTaps = kn; decideMethod(profile);
+  profiles.save(profile); setTable(profile);
+  closeOverlay('knuckle'); setMode(playMode()); renderPads();
   toast('Knuckle sounds unlocked: 8 sounds now');
 }
-$('#kn-cancel').addEventListener('click', () => { knuckleCal = null; closeOverlay('knuckle'); setMode({ kind: 'play' }); });
+$('#kn-cancel').addEventListener('click', () => { knuckleCal = null; closeOverlay('knuckle'); setMode(playMode()); });
 
 // ---------- play ----------
 let playTaps = 0, playSince = 0, unsureTimes: number[] = [], wasLifted = false, tiltUnsub: (() => void) | null = null;
 function enterPlay() {
   show('play'); renderPads(); renderChips();
-  if (!store.get('benchpress.areaHint', false)) { store.set('benchpress.areaHint', true); toast('Tap inside the areas you calibrated', 4000); }
-  setMode({ kind: 'play' });
+  if (!store.get('benchpress.areaHint', false)) { store.set('benchpress.areaHint', true); toast('Tap on the sides you calibrated', 4000); }
+  setMode(playMode());
   playTaps = 0; playSince = performance.now(); baselineTilt = currentTilt();
   tiltUnsub?.();
   tiltUnsub = onTilt(t => {
@@ -406,6 +454,19 @@ function onPlayTap(zone: number, knuckle: boolean, vel: number) {
   if (profile && !profile.knuckleTaps.length && playTaps === 24 && performance.now() - playSince > 15000)
     showBanner('New: knock with a knuckle for 4 more sounds.', 'Try it', startKnuckle);
 }
+/** Sides with motion: wait for the motion readings around the tap, decide the side, then play. */
+async function onHeard(feat: number[], peak: number, frame: number) {
+  if (screen !== 'play' || !mainCls) return;
+  const tapAt = engine.frameToPerf(frame);
+  const mf = sideCls ? await motion.featuresAfter(tapAt) : null;
+  const base = mainCls.classify(feat, peak, { zone: 0, knuckle: false, velocity: 0, confidence: 0 });
+  const side = sideCls?.classify(feat, mf);
+  const zone = side ? side.zone : base.zone;
+  if (zone < 0) { if (debugLog.length < 2000 && location.search.includes('debug')) debugLog.push({ type: 'unsure', frame, at: Math.round(performance.now()) }); return onUnsure(); }
+  engine.play(zone * 2 + (base.knuckle ? 1 : 0), base.velocity, frame);
+  if (debugLog.length < 2000 && location.search.includes('debug')) debugLog.push({ type: 'tap', zone, knuckle: base.knuckle, velocity: base.velocity, confidence: side?.confidence ?? base.confidence, frame, via: sideCls?.method, at: Math.round(performance.now()) });
+  onPlayTap(zone, base.knuckle, base.velocity);
+}
 function onUnsure() {
   if (screen !== 'play') return;
   fx.doubt(innerWidth / 2, innerHeight * 0.45);
@@ -448,7 +509,7 @@ hp.addEventListener('change', () => { prefs.headphones = hp.checked; savePrefs()
 $('#latency-test').addEventListener('click', async () => {
   $('#latency-val').textContent = '…'; setMode({ kind: 'idle' }); engine.latencyTest();
   const r = await once('latency', 1500); if (r?.ms != null) latencyMs = r.ms;
-  setMode({ kind: 'play' }); renderLatency();
+  setMode(playMode()); renderLatency();
 });
 function renderLatency() {
   const v = $('#latency-val');
@@ -479,6 +540,7 @@ function renderSettings() {
     `table: ${profile ? `${profile.name}, ${profile.zoneTaps.length} taps, ${Math.round(profile.quality * 100)}%` : '—'}`,
     `tap floor: ${config().minLevel.toFixed(4)} (typical tap ${(profile && typicalTapRms(profile.zoneTaps))?.toFixed(4) ?? '—'})`,
     `engine: ${lastStats ? `onsets ${lastStats.onsets}, echoes ignored ${lastStats.echoesRejected}, too quiet ${lastStats.tooQuiet}, echo delay ${lastStats.echoDelayMs == null ? '?' : Math.round(lastStats.echoDelayMs) + ' ms' + (lastStats.echoLearned ? ' (learned)' : '')}, speaker ${lastStats.quietSpeaker ? 'not heard' : 'heard'}, leak ${lastStats.leak.toFixed(2)}, noise ${lastStats.noise.toFixed(4)}, floor ${lastStats.minLevel.toFixed(4)}` : '—'}`,
+    `motion: ${Math.round(motion.rate)} readings/s, clock shift ${motion.offsetLearned ? motion.offset + ' ms' : 'not learned'} · table method: ${profile?.method ?? '—'} ${profile?.scores ? JSON.stringify(Object.fromEntries(Object.entries(profile.scores).map(([k, v]) => [k, Math.round(v * 100)]))) : ''}`,
     `tilt: ${JSON.stringify(currentTilt())}`, `iOS: ${isIOS} · UA: ${navigator.userAgent}`,
   ].join('\n');
 }
@@ -499,7 +561,7 @@ listeners.push(m => {
   if (m.zone >= 0) { const [x, y] = [innerWidth / 2, 60]; fx.burst(x, y, COLORS[m.zone], 0.5, m.knuckle); }
 });
 // closing the inspector returns to normal play
-new MutationObserver(() => { if ($('#inspect').classList.contains('hidden') && screen === 'play') setMode({ kind: 'play' }); })
+new MutationObserver(() => { if ($('#inspect').classList.contains('hidden') && screen === 'play') setMode(playMode()); })
   .observe($('#inspect'), { attributes: true, attributeFilter: ['class'] });
 
 // ---------- guided recording for analysis ----------

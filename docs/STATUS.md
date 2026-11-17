@@ -14,6 +14,21 @@
 | Full app flow (e2e) | landing → mic → flat → first tap → calibration → play → knuckle unlock, no errors |
 | DSP cost | ~2 µs per 128-sample block (budget 2,667 µs) |
 
+## Sides: sound + motion
+
+Sound alone can only learn spots that sound different; it can't know direction. A tap also rocks the phone
+towards the side it came from, so v1 measures the gyroscope and accelerometer around every tap too.
+
+- Calibration (8 taps along each side) records sound and motion for every tap.
+- The audio and motion clocks are out of step by an unknown amount; it is learned from the calibration taps
+  (the shift at which motion spikes line up with taps).
+- The app scores three methods on the calibration taps (sound, motion, both) and uses the best. Motion-based
+  methods must win clearly, because waiting for motion readings adds lag; the lag is shown on screen.
+
+Tested (headless Chromium, fake mic + fake 100 Hz motion where every side *sounds the same*): sound 31%,
+motion 72% → 29/40 play taps on the right side (sound alone ≈ 25%). Not yet tested on a real phone: how fast
+real browsers deliver motion readings and how much lag that adds is the open question.
+
 ## How echo rejection works
 
 The phone hears its own speaker through the table. Without protection, every sound becomes a new "tap" and it plays by itself.
@@ -23,6 +38,7 @@ The phone hears its own speaker through the table. Without protection, every sou
 3. Onsets at that delay (plus the sound's attack length) are ignored.
 4. Outside that window, a tap must be clearly louder than the expected echo level, learned from identified echoes.
 5. If sounds keep playing and no consistent echo delay ever appears, the speaker isn't reaching the mic, and the checks relax.
+7. Rhythm is not an echo: a delay measured by the click is locked, and only delays under 170 ms are learned (steady playing at 120 BPM taps every 250 ms).
 6. Calibration plays only a quiet tick, and strummed or melodic instruments mute their previous note (choke).
 
 Headphones mode switches all of this off.

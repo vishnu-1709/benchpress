@@ -39,6 +39,7 @@ export async function startOrientation(): Promise<boolean> {
   try {
     if (needsOrientationPermission) {
       const r = await (window as any).DeviceOrientationEvent.requestPermission();
+      try { await (window as any).DeviceMotionEvent?.requestPermission?.(); } catch { /* motion is optional */ }
       if (r !== 'granted') return false;
     }
     if (!listening) { window.addEventListener('deviceorientation', onOrient); listening = true; }

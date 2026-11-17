@@ -44,7 +44,7 @@ export class TapDetector {
   /** True once we've seen that our own sounds don't reach the mic loudly enough to matter. */
   quietSpeaker = false;
   private delayHist = new Float32Array(200);                    // 2 ms bins, 0..400 ms
-  private delayMs: number | null = null; private delayLearned = false;
+  private delayMs: number | null = null; private delayLearned = false; private delayLocked = false;
   leak = 0.45;                 // mic level / output level at the echo delay: learned from identified echoes
   private echoMargin = 1.5;      // outside attack windows, a tap must be this much louder than the expected echo
   /** How many onsets were rejected as echoes (debug / tests). */
@@ -87,7 +87,8 @@ export class TapDetector {
   /** Echo rejection on (phone speaker) or off (headphones). measuredDelayFrames: from the click test, if it worked. */
   setEchoGate(on: boolean, measuredDelayFrames: number | null = null, measuredLeak: number | null = null) {
     this.gate = on;
-    if (measuredDelayFrames != null && !this.delayLearned) this.delayMs = measuredDelayFrames * 1000 / this.sr;
+    // a measured delay (click into silence) is trusted: rhythmic tapping must not re-teach it
+    if (measuredDelayFrames != null) { this.delayMs = measuredDelayFrames * 1000 / this.sr; this.delayLearned = true; this.delayLocked = true; }
     if (measuredLeak != null) this.leak = Math.max(0.02, measuredLeak);
     if (measuredLeak != null && measuredLeak < 0.05) this.quietSpeaker = true;
   }
@@ -119,11 +120,12 @@ export class TapDetector {
     for (let i = 0; i < n; i++) {
       const k = (this.attackN - 1 - i) & 63, d = f - this.attacks[k];
       if (d < 0 || d > 500) continue;
-      if (learn && d < 400) this.delayHist[Math.floor(d / 2)] += 1;
-      if (this.delayMs == null) { if (!this.quietSpeaker && d >= 5 && d <= 350 + this.spreads[k]) echo = true; } // unknown: wide
+      // echoes on phones come back within ~170 ms; longer gaps are more likely the rhythm of real taps
+      if (learn && !this.delayLocked && d < 170) this.delayHist[Math.floor(d / 2)] += 1;
+      if (this.delayMs == null) { if (!this.quietSpeaker && d >= 5 && d <= 150 + this.spreads[k]) echo = true; } // unknown: wide (matches the learnable echo range)
       else if (d >= this.delayMs - 10 && d <= this.delayMs + 15 + this.spreads[k]) { echo = true; if (this.learnable[k] && Math.abs(d - this.delayMs) <= 8) this.matchedLearnable = true; }
     }
-    if (learn) this.updateDelay();
+    if (learn && !this.delayLocked) this.updateDelay();
     return echo;
   }
 
@@ -263,15 +265,18 @@ export class Knn {
   private Z: Float64Array; private labels: Int32Array; private mu: Float64Array; private sd: Float64Array;
   readonly n: number; readonly d: number; readonly nClasses: number;
   private bestD = new Float64Array(3); private bestL = new Int32Array(3); private votes: Int32Array;
-  constructor(X: ArrayLike<number>[], y: number[], public k = 3) {
+  private w: Float64Array;
+  /** weights: optional per-dimension importance, applied after standardising (used to balance sound vs motion). */
+  constructor(X: ArrayLike<number>[], y: number[], public k = 3, weights?: number[]) {
     this.n = X.length; this.d = X[0]?.length ?? N_FEAT;
     this.nClasses = Math.max(1, ...y) + 1; this.votes = new Int32Array(this.nClasses);
     this.mu = new Float64Array(this.d); this.sd = new Float64Array(this.d);
     for (const r of X) for (let j = 0; j < this.d; j++) this.mu[j] += r[j] / this.n;
     for (const r of X) for (let j = 0; j < this.d; j++) this.sd[j] += (r[j] - this.mu[j]) ** 2 / this.n;
     for (let j = 0; j < this.d; j++) this.sd[j] = Math.sqrt(this.sd[j]) + 1e-3;
+    this.w = new Float64Array(this.d).fill(1); if (weights) for (let j = 0; j < this.d; j++) this.w[j] = weights[j] ?? 1;
     this.Z = new Float64Array(this.n * this.d); this.labels = Int32Array.from(y);
-    X.forEach((r, i) => { for (let j = 0; j < this.d; j++) this.Z[i * this.d + j] = (r[j] - this.mu[j]) / this.sd[j]; });
+    X.forEach((r, i) => { for (let j = 0; j < this.d; j++) this.Z[i * this.d + j] = (r[j] - this.mu[j]) / this.sd[j] * this.w[j]; });
     this.k = Math.min(k, this.n);
   }
   /** Returns label; writes nearest distance (per-dimension RMS) and vote share into out. */
@@ -280,7 +285,7 @@ export class Knn {
     for (let i = 0; i < this.n; i++) {
       if (i === skip) continue;
       let s = 0; const o = i * this.d;
-      for (let j = 0; j < this.d; j++) { const z = (x[j] - this.mu[j]) / this.sd[j] - this.Z[o + j]; s += z * z; }
+      for (let j = 0; j < this.d; j++) { const z = (x[j] - this.mu[j]) / this.sd[j] * this.w[j] - this.Z[o + j]; s += z * z; }
       if (s < this.bestD[k - 1]) {
         let p = k - 1; while (p > 0 && this.bestD[p - 1] > s) { this.bestD[p] = this.bestD[p - 1]; this.bestL[p] = this.bestL[p - 1]; p--; }
         this.bestD[p] = s; this.bestL[p] = this.labels[i];

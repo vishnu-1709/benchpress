@@ -59,6 +59,14 @@ export class Engine {
   latencyTest() { this.send({ type: 'latencyTest' }); }
   preview(sound: number, gain = 0.8) { this.send({ type: 'preview', sound, gain }); }
   record(on: boolean) { this.send({ type: 'record', on }); }
+  play(sound: number, velocity: number, onsetFrame: number) { this.send({ type: 'play', sound, velocity, onsetFrame }); }
+  /** Audio frame number -> performance.now() time (ms), to line taps up with motion readings. */
+  frameToPerf(frame: number): number {
+    const c = this.ctx; if (!c) return performance.now();
+    const ts = c.getOutputTimestamp?.();
+    if (ts && ts.performanceTime && ts.contextTime != null) return ts.performanceTime + (frame / this.sampleRate - ts.contextTime) * 1000;
+    return performance.now() - (c.currentTime - frame / this.sampleRate) * 1000;
+  }
 }
 
 export const engine = new Engine();

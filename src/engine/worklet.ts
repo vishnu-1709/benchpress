@@ -74,6 +74,7 @@ class BenchpressProcessor extends AudioWorkletProcessor {
       case 'headphones': this.headphones = m.on; this.det.setEchoGate(!m.on, null); break;
       case 'loop': m.cmd === 'clear' ? this.loopClear() : this.loopToggle(); break;
       case 'latencyTest': this.latTestAt = currentFrame + 128; break;
+      case 'play': this.playSound(m.sound, m.velocity, m.onsetFrame); break;
       case 'record': this.recOn = m.on; if (!m.on) this.flushRec(); break;
       case 'preview': this.startVoice(this.kits.get(this.current)?.[m.sound] ?? null, m.gain, currentFrame); break;
     }
@@ -125,6 +126,7 @@ class BenchpressProcessor extends AudioWorkletProcessor {
         confidence: r ? r.confidence : 0, dist: this.cls ? this.cls.lastDist : 0, micDb: this.micDbAt(o.frame), frame: o.frame });
       return;
     }
+    if (mode.kind === 'play' && mode.external) { this.post({ type: 'heard', feat: Array.from(o.feat), peak: o.peak, frame: o.frame }); return; }
     if (!this.cls) return;
     const r = this.cls.classify(o.feat, o.peak, this.clsOut);
     if (r.zone < 0) { this.post({ type: 'unsure', frame: o.frame, velocity: r.velocity }); return; }

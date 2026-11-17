@@ -1,7 +1,7 @@
 // Message contract between the page (main thread) and the audio thread (AudioWorklet).
 // Keep this file the single source of truth: both sides import these types.
 
-export const DSP_VERSION = 4;
+export const DSP_VERSION = 5;
 
 export interface DspConfig {
   postMs: number;        // feature window after onset (ms); each ms is a ms of lag
@@ -28,7 +28,7 @@ export type Mode =
   | { kind: 'first' }                      // first-tap screen: any tap plays a sound
   | { kind: 'calibrate'; zone: number }    // collect finger taps for one zone
   | { kind: 'calibrateKnuckle'; zone: number } // collect knuckle taps for one zone
-  | { kind: 'play' }
+  | { kind: 'play'; external?: boolean }   // external: the page decides the side (sound + motion) and asks to play
   | { kind: 'inspect' };                    // like play, but silent and reports every tap's fingerprint
 
 export type ToWorklet =
@@ -42,7 +42,8 @@ export type ToWorklet =
   | { type: 'loop'; cmd: 'toggle' | 'clear' }
   | { type: 'latencyTest' }
   | { type: 'preview'; sound: number; gain: number }
-  | { type: 'record'; on: boolean };
+  | { type: 'record'; on: boolean }
+  | { type: 'play'; sound: number; velocity: number; onsetFrame: number };
 
 export type LoopPhase = 'empty' | 'recording' | 'playing' | 'overdub';
 
@@ -57,4 +58,5 @@ export type FromWorklet =
   | { type: 'loopFull' }
   | { type: 'stats'; echoDelayMs: number | null; echoLearned: boolean; quietSpeaker: boolean; leak: number; echoesRejected: number; tooQuiet: number; noise: number; minLevel: number; onsets: number }
   | { type: 'rec'; channels: Float32Array[] }
+  | { type: 'heard'; feat: number[]; peak: number; frame: number }   // play-external: a tap for the page to classify
   | { type: 'inspect'; feat: number[]; peak: number; zone: number; knuckle: boolean; confidence: number; dist: number; micDb: number | null; frame: number };            // raw mic chunk while recording (both channels)

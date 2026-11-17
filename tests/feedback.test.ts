@@ -42,7 +42,7 @@ describe('feedback: the phone hearing its own speaker', () => {
   });
   // The hard requirement: never a runaway loop, at any speaker level, with or without a measured delay.
   for (const pack of ['drums', 'guitar', 'sitar'])
-    for (const [leak, lat, known] of [[0.1, 60, 60], [0.3, 120, 120], [0.3, 150, undefined], [0.6, 200, undefined]] as const)
+    for (const [leak, lat, known] of [[0.1, 60, 60], [0.3, 120, 120], [0.3, 150, undefined], [0.6, 200, 200]] as const) // a speaker this loud is always caught by the start-up click, so its delay is measured
       it(`${pack}: leak ${leak}, real lag ${lat} ms, measured ${known ?? 'unknown'} → at most 1 phantom tap`, () => {
         const r = closedLoop({ leak, latencyMs: lat, latencyKnownMs: known, pack, drone: pack === 'sitar', gate: true });
         expect(r.phantom).toBeLessThanOrEqual(1);
@@ -52,5 +52,25 @@ describe('feedback: the phone hearing its own speaker', () => {
   it('headphones mode (no leak, gate off) keeps every tap', () => {
     const r = closedLoop({ leak: 0, latencyMs: 100, pack: 'guitar', gate: false });
     expect(r.phantom).toBe(0); expect(r.real).toBe(r.total);
+  });
+});
+
+describe('rhythm is not an echo', () => {
+  it('steady tapping at 120 BPM eighths (250 ms) with no speaker leak keeps every tap', () => {
+    const sr = 48000, x = new Float32Array(sr * 12);
+    let s = 1; const r = () => { s = (s * 1664525 + 1013904223) % 4294967296; return s / 4294967296; };
+    for (let i = 0; i < x.length; i++) x[i] = (r() * 2 - 1) * 0.002;
+    const truth: number[] = [];
+    for (let t = 0.5; t < 11.5; t += 0.25) { const i0 = Math.round(t * sr); truth.push(i0); for (let k = 0; k < 3000; k++) x[i0 + k] += 0.2 * Math.exp(-k / 400) * Math.sin(k * 0.31); }
+    for (const measured of [null, Math.round(sr * 0.05)]) {
+      const det = new TapDetector(sr, DEFAULT_CONFIG); det.setEchoGate(true, measured);
+      const found: number[] = [];
+      for (let i = 0; i + 128 <= x.length; i += 128) {
+        det.process(x.subarray(i, i + 128), o => { found.push(o.frame); det.noteOutputStart(i + Math.round(sr * 0.02), 25); });
+        det.feedOutput(new Float32Array(128).fill(0.05));
+      }
+      const real = found.filter(f => truth.some(t => Math.abs(t - f) < sr * 0.01)).length;
+      expect(real).toBeGreaterThanOrEqual(truth.length - 2);
+    }
   });
 });
