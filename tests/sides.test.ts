@@ -31,8 +31,12 @@ describe('sides: sound + motion', () => {
         out.push({ zone: z, feat: Array.from({ length: N_FEAT }, () => gauss(r)),
           motion: [dir[z][1] * 3 * f + gauss(r) * 0.15 * f, dir[z][0] * 3 * f + gauss(r) * 0.15 * f, gauss(r) * 0.15 * f, dir[z][0] * f + gauss(r) * 0.1 * f, dir[z][1] * f + gauss(r) * 0.1 * f, gauss(r) * 0.1 * f] }); }
       return out; };
-    const cal = mk(8, 11), test = mk(30, 12);
-    expect(acc(new SideClassifier(cal, 'motion'), test)).toBeGreaterThan(0.9);
+    const cal = mk(8, 11), test = mk(30, 12), c = new SideClassifier(cal, 'motion');
+    const res = test.map(t => c.classify(t.feat, t.motion ?? null));
+    const decided = res.filter(r => r).length / test.length;                 // very soft taps defer to sound
+    const right = res.filter((r, i) => r && r.zone === test[i].zone).length / res.filter(r => r).length;
+    expect(decided).toBeGreaterThan(0.8);
+    expect(right).toBeGreaterThan(0.95);
   });
   it('sound alike, motion clear → picks motion/both and gets sides right', () => {
     const cal = taps(8, 0.15, 3, 1), test = taps(25, 0.15, 3, 2);

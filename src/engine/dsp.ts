@@ -302,8 +302,9 @@ export class Knn {
 }
 
 /** Leave-one-out accuracy of the zone model: the "surface quality" score after calibration. */
-export function surfaceQuality(feats: number[][], labels: number[]): number {
-  if (feats.length < 6) return 0;
+export function surfaceQuality(rawFeats: number[][], labels: number[], mode: 'raw' | 'shape' = 'raw'): number {
+  if (rawFeats.length < 6) return 0;
+  const feats = mode === 'shape' ? rawFeats.map(f => Array.from(shapeFeatures(f))) : rawFeats;
   const knn = new Knn(feats, labels, 3), out = { dist: 0, conf: 0 };
   let ok = 0;
   feats.forEach((f, i) => { if (knn.predict(f, out, i) === labels[i]) ok++; });
@@ -311,11 +312,23 @@ export function surfaceQuality(feats: number[][], labels: number[]): number {
 }
 
 /** Distance threshold for "this tap matches no zone": generous multiple of typical nearest-neighbour distance. */
-export function rejectDistance(feats: number[][], labels: number[]): number {
+export function rejectDistance(rawFeats: number[][], labels: number[], mode: 'raw' | 'shape' = 'raw'): number {
+  const feats = mode === 'shape' ? rawFeats.map(f => Array.from(shapeFeatures(f))) : rawFeats;
   const knn = new Knn(feats, labels, 3), out = { dist: 0, conf: 0 };
   const ds = feats.map((f, i) => { knn.predict(f, out, i); return out.dist; }).sort((a, b) => a - b);
   const median = ds[Math.floor(ds.length / 2)] ?? 1;
   return Math.max(1.5, median * 3.5);
+}
+
+/**
+ * Force-resistant fingerprint: differences between neighbouring pitch bands (the resonance pattern) plus decay.
+ * Harder taps are brighter overall, which shifts absolute band levels but barely changes these differences.
+ */
+export const SHAPE_DIM = N_BANDS;
+export function shapeFeatures(f: ArrayLike<number>, out: Float64Array = new Float64Array(SHAPE_DIM)): Float64Array {
+  for (let i = 1; i < N_BANDS; i++) out[i - 1] = f[i] - f[i - 1];
+  out[N_BANDS - 1] = f[N_BANDS + 1];
+  return out;
 }
 
 /** Classifies taps with a trained table model. Knuckle calibration taps carry their zone, so they teach both models. */
@@ -324,8 +337,11 @@ export class TapClassifier {
   private o = { dist: 0, conf: 0 };
   /** distance of the last classified tap to its nearest calibration tap (debug / inspect) */
   lastDist = 0;
+  private shape: boolean; private sf = new Float64Array(SHAPE_DIM);
   constructor(m: TableModel) {
-    this.zone = new Knn([...m.zoneFeats, ...m.knuckleFeats], [...m.zoneLabels, ...m.knuckleLabels], 3);
+    this.shape = m.zoneFeature === 'shape';
+    const zf = (f: number[]) => this.shape ? Array.from(shapeFeatures(f)) : f;
+    this.zone = new Knn([...m.zoneFeats, ...m.knuckleFeats].map(zf), [...m.zoneLabels, ...m.knuckleLabels], 3);
     this.type = m.knuckleFeats.length >= 3
       ? new Knn([...m.zoneFeats, ...m.knuckleFeats], [...m.zoneFeats.map(() => 0), ...m.knuckleFeats.map(() => 1)], 3)
       : null;
@@ -334,7 +350,7 @@ export class TapClassifier {
   /** zone -1 = heard a tap but it matches nothing. */
   classify(feat: ArrayLike<number>, peak: number, out: { zone: number; knuckle: boolean; velocity: number; confidence: number }) {
     out.knuckle = this.type ? this.type.predict(feat, this.o) === 1 : false;
-    const z = this.zone.predict(feat, this.o);
+    const z = this.zone.predict(this.shape ? shapeFeatures(feat, this.sf) : feat, this.o);
     this.lastDist = this.o.dist;
     // three nearest calibration taps from three different areas = genuinely unclear: play nothing rather than guess
     const far = this.o.dist > this.reject || this.o.conf < 0.5;

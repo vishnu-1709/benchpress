@@ -1,6 +1,8 @@
 // Synthetic table taps: shared resonances, zone-dependent mixing (multipath), finger vs knuckle excitation.
 export interface TruthTap { t: number; zone: number; knuckle: boolean; force: number }
-export function makeTaps(o: { sr?: number; perZone?: number; knuckle?: boolean; seed?: number; noise?: number } = {}) {
+export function makeTaps(o: { sr?: number; perZone?: number; knuckle?: boolean; seed?: number; noise?: number; brightness?: number } = {}) {
+  // brightness > 0: harder taps excite high frequencies more (as real taps do), not just louder
+  const bright = o.brightness ?? 0;
   const sr = o.sr ?? 48000, perZone = o.perZone ?? 25, noiseAmp = o.noise ?? 0.003;
   let s = o.seed ?? 1; const rnd = () => { s = (s * 1664525 + 1013904223) % 4294967296; return s / 4294967296; };
   const modes = Array.from({ length: 18 }, () => ({ f: 150 + rnd() * 9000, d: 30 + rnd() * 250 }));
@@ -14,8 +16,9 @@ export function makeTaps(o: { sr?: number; perZone?: number; knuckle?: boolean; 
   const truth: TruthTap[] = [];
   for (const [z, kn] of order) {
     const force = 0.2 + 0.8 * rnd(), n = Math.round(sr * 0.12);
+    const tilt = (f: number) => Math.pow(f / 1500, bright * (force - 0.6) * 2);
     modes.forEach((m, mi) => {
-      const w = W[z][mi] * (1 + (rnd() * 2 - 1) * 0.25) * force * (m.f > 2500 ? (kn ? 1.6 : 0.45) : 1), ph = rnd() * 6.28, d = m.d * (kn ? 1.3 : 1);
+      const w = W[z][mi] * (1 + (rnd() * 2 - 1) * 0.25) * force * tilt(m.f) * (m.f > 2500 ? (kn ? 1.6 : 0.45) : 1), ph = rnd() * 6.28, d = m.d * (kn ? 1.3 : 1);
       for (let k = 0; k < n; k++) x[t + k] += w * 0.08 * Math.exp(-k / sr * d) * Math.sin(2 * Math.PI * m.f * k / sr + ph);
     });
     truth.push({ t, zone: z, knuckle: kn, force });

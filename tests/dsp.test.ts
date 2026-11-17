@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { TapDetector, TapClassifier, surfaceQuality, rejectDistance } from '../src/engine/dsp';
+import { chooseMethod } from '../src/app/sides';
 import { DEFAULT_CONFIG, type TableModel } from '../src/engine/protocol';
 import { makeTaps } from './synthTaps';
 
@@ -51,5 +52,25 @@ for (const sr of [44100, 48000]) describe(`DSP at ${sr} Hz`, () => {
     const ma = a.reduce((s, v) => s + v, 0) / a.length, mb = b.reduce((s, v) => s + v, 0) / b.length;
     const r = a.reduce((s, v, i) => s + (v - ma) * (b[i] - mb), 0) / Math.sqrt(a.reduce((s, v) => s + (v - ma) ** 2, 0) * b.reduce((s, v) => s + (v - mb) ** 2, 0));
     expect(r).toBeGreaterThan(0.7);
+  });
+});
+
+describe('tap force: harder taps are brighter', () => {
+  it('calibration picks the force-resistant fingerprint and gets more sides right', () => {
+    let rawSum = 0, chosenSum = 0, picked = 0;
+    for (const seed of [3, 7, 11, 19]) {
+      const sr = 48000, { x, truth } = makeTaps({ sr, perZone: 25, seed, brightness: 1.2 });
+      const taps = detect(x, sr).map(tp => ({ tp, tr: truth.find(v => Math.abs(v.t - tp.frame) < sr * 0.01)! })).filter(m => m.tr);
+      const cal = [0, 1, 2, 3].flatMap(z => taps.filter(m => m.tr.zone === z).slice(0, 8)), test = taps.filter(m => !cal.includes(m));
+      const ch = chooseMethod(cal.map(m => ({ zone: m.tr.zone, feat: m.tp.feat })));
+      if (ch.soundMode === 'shape') picked++;
+      const model = (mode: 'raw' | 'shape'): TableModel => ({ zoneFeats: cal.map(m => m.tp.feat), zoneLabels: cal.map(m => m.tr.zone), knuckleFeats: [], knuckleLabels: [],
+        zonePeakMean: [1, 1, 1, 1], rejectDist: 1e9, zoneFeature: mode });
+      const out = { zone: 0, knuckle: false, velocity: 0, confidence: 0 };
+      const accOf = (c: TapClassifier) => test.filter(m => c.classify(m.tp.feat, m.tp.peak, out).zone === m.tr.zone).length / test.length;
+      rawSum += accOf(new TapClassifier(model('raw'))); chosenSum += accOf(new TapClassifier(model(ch.soundMode)));
+    }
+    console.log(`FORCETEST raw ${(rawSum / 4 * 100).toFixed(0)}% → chosen ${(chosenSum / 4 * 100).toFixed(0)}%, shape picked ${picked}/4`);
+    expect(chosenSum).toBeGreaterThan(rawSum);
   });
 });

@@ -19,6 +19,7 @@ export interface TableProfile {
   method?: 'sound' | 'motion' | 'both';
   scores?: { sound: number; motion: number; both: number };
   motionOffset?: number;   // learned audio→motion clock shift (ms)
+  soundMode?: 'raw' | 'shape';
 }
 
 const KEY = 'benchpress.tables.v1';
@@ -26,13 +27,13 @@ interface Saved { tables: TableProfile[]; lastId: string | null }
 
 const MAX_PER_ZONE = 12; // enough to cover a palm-sized area; newest taps win
 
-export function buildModel(p: Pick<TableProfile, 'zoneTaps' | 'knuckleTaps'>): TableModel {
+export function buildModel(p: Pick<TableProfile, 'zoneTaps' | 'knuckleTaps' | 'soundMode'>): TableModel {
   const feats = p.zoneTaps.map(t => t.feat), labels = p.zoneTaps.map(t => t.zone);
   const zonePeakMean = [0, 1, 2, 3].map(z => {
     const ps = p.zoneTaps.filter(t => t.zone === z).map(t => t.peak);
     return ps.length ? ps.reduce((a, b) => a + b, 0) / ps.length : 0.1;
   });
-  return { zoneFeats: feats, zoneLabels: labels, knuckleFeats: p.knuckleTaps.map(t => t.feat), knuckleLabels: p.knuckleTaps.map(t => t.zone), zonePeakMean, rejectDist: rejectDistance(feats, labels) };
+  return { zoneFeats: feats, zoneLabels: labels, knuckleFeats: p.knuckleTaps.map(t => t.feat), knuckleLabels: p.knuckleTaps.map(t => t.zone), zonePeakMean, rejectDist: rejectDistance(feats, labels, p.soundMode ?? 'raw'), zoneFeature: p.soundMode ?? 'raw' };
 }
 
 /** Typical onset loudness of this user's taps on this table (median of calibration taps). */

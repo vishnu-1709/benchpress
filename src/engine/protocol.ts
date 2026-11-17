@@ -21,6 +21,7 @@ export interface TableModel {
   knuckleLabels: number[]; // zone of each knuckle calibration tap
   zonePeakMean: number[];  // mean peak per zone, for velocity normalisation
   rejectDist: number;      // normalised distance beyond which a tap matches nothing
+  zoneFeature?: 'raw' | 'shape'; // 'shape' ignores overall brightness, so tap force matters less
 }
 
 export type Mode =

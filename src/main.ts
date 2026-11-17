@@ -67,7 +67,7 @@ const playMode = (): Mode => ({ kind: 'play', external: !!profile?.method && pro
 // ---------- choosing sound / motion / both for a table ----------
 function decideMethod(p: TableProfile) {
   const ch = chooseMethod([...p.zoneTaps, ...p.knuckleTaps]);
-  p.method = ch.method; p.scores = ch.scores; p.quality = ch.scores[ch.method];
+  p.method = ch.method; p.soundMode = ch.soundMode; p.scores = ch.scores; p.quality = ch.scores[ch.method];
 }
 let sideCls: SideClassifier | null = null, mainCls: TapClassifier | null = null;
 function setTable(p: TableProfile) {
@@ -75,9 +75,10 @@ function setTable(p: TableProfile) {
   const model = buildModel(p);
   engine.setModel(model); applyConfig();
   mainCls = new TapClassifier(model);
-  sideCls = p.method && p.method !== 'sound' ? new SideClassifier([...p.zoneTaps, ...p.knuckleTaps], p.method) : null;
+  sideCls = p.method && p.method !== 'sound' ? new SideClassifier([...p.zoneTaps, ...p.knuckleTaps], p.method, p.soundMode ?? 'raw') : null;
 }
 const METHOD_NAME: Record<Method, string> = { sound: 'sound', motion: 'motion', both: 'sound + motion' };
+// (sound fingerprint variant per table: 'raw' levels or force-resistant 'shape', see sides.chooseMethod)
 
 function ensurePack(id: string) {
   const p = packById(id);
@@ -350,7 +351,7 @@ async function finishCalibration() {
   const draft = profiles.create('draft', engine.sampleRate, null, cal.taps, profile?.knuckleTaps ?? []);
   decideMethod(draft);
   const q = draft.quality, sc = draft.scores!;
-  const cf = confusion([...draft.zoneTaps, ...draft.knuckleTaps], draft.method!);
+  const cf = confusion([...draft.zoneTaps, ...draft.knuckleTaps], draft.method!, draft.soundMode ?? 'raw');
   const SIDE = ['left (blue)', 'top (pink)', 'right (yellow)', 'bottom (green)'];
   const per = cf.perSide.map((a, z) => `${SIDE[z].split(' ')[0]} ${Math.round(a * 100)}%`).join(' · ');
   const worst = cf.worst && cf.worst.n >= 2 ? ` Most mixed up: ${SIDE[cf.worst.a]} ↔ ${SIDE[cf.worst.b]}.` : '';
@@ -359,7 +360,8 @@ async function finishCalibration() {
   const mean = gaps.reduce((a, b) => a + b, 0) / Math.max(1, gaps.length);
   const cv = Math.sqrt(gaps.reduce((a, g) => a + (g - mean) ** 2, 0) / Math.max(1, gaps.length)) / (mean || 1);
   const pacing = draft.method !== 'sound' && cv < 0.12 ? ' Tip: tap at an uneven pace when calibrating.' : '';
-  $('#side-text').textContent = `${per}.${worst}${pacing}`;
+  const shapeNote = draft.soundMode === 'shape' ? ' Your taps changed with force, so I compare sound shape, not loudness.' : '';
+  $('#side-text').textContent = `${per}.${worst}${shapeNote}${pacing}`;
   $('#method-text').textContent = motion.usable
     ? `Sound ${Math.round(sc.sound * 100)}% · Motion ${Math.round(sc.motion * 100)}% · Both ${Math.round(sc.both * 100)}% → using ${METHOD_NAME[draft.method!]}${draft.method !== 'sound' ? ` (sides add about ${motion.lagMs} ms of lag${motion.lagMs > 120 ? ': your browser delivers motion late' : ''})` : ''}`
     : `Sound ${Math.round(sc.sound * 100)}% · motion sensor: ${Math.round(motion.rate)} readings/s (too few for sides)`;
