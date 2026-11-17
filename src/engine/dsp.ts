@@ -317,6 +317,8 @@ export function rejectDistance(feats: number[][], labels: number[]): number {
 export class TapClassifier {
   private zone: Knn; private type: Knn | null; private peaks: number[]; private reject: number;
   private o = { dist: 0, conf: 0 };
+  /** distance of the last classified tap to its nearest calibration tap (debug / inspect) */
+  lastDist = 0;
   constructor(m: TableModel) {
     this.zone = new Knn([...m.zoneFeats, ...m.knuckleFeats], [...m.zoneLabels, ...m.knuckleLabels], 3);
     this.type = m.knuckleFeats.length >= 3
@@ -328,6 +330,7 @@ export class TapClassifier {
   classify(feat: ArrayLike<number>, peak: number, out: { zone: number; knuckle: boolean; velocity: number; confidence: number }) {
     out.knuckle = this.type ? this.type.predict(feat, this.o) === 1 : false;
     const z = this.zone.predict(feat, this.o);
+    this.lastDist = this.o.dist;
     const far = this.o.dist > this.reject;
     out.confidence = far ? 0 : this.o.conf;
     out.zone = far ? -1 : z;

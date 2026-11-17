@@ -6,6 +6,7 @@ import { DEFAULT_CONFIG, DSP_VERSION, type FromWorklet, type Mode } from './engi
 import { PACKS, packById, renderPack } from './sounds/packs';
 import { Fx } from './ui/fx';
 import { Recorder } from './app/recorder';
+import { Inspector } from './ui/inspect';
 import { buildModel, mergeTaps, profiles, qualityOf, typicalTapRms, type CalTap, type TableProfile } from './app/profiles';
 import {
   currentTilt, inAppBrowser, isFlat, isIOS, isMobile, keepAwake, micSupported, needsOrientationPermission,
@@ -482,6 +483,24 @@ function renderSettings() {
   ].join('\n');
 }
 $('#open-settings').addEventListener('click', () => openOverlay('settings'));
+
+// ---------- see your taps ----------
+let inspector: Inspector | null = null;
+$('#open-inspect').addEventListener('click', () => {
+  closeOverlay('settings'); openOverlay('inspect');
+  inspector ??= new Inspector($('#inspect-map') as HTMLCanvasElement, $('#inspect-bars') as HTMLCanvasElement, $('#inspect-readout'));
+  requestAnimationFrame(() => inspector!.setCalibration(profile?.zoneTaps ?? [], profile?.knuckleTaps ?? []));
+  setMode({ kind: 'inspect' });
+});
+$('#inspect-clear').addEventListener('click', () => inspector?.setCalibration(profile?.zoneTaps ?? [], profile?.knuckleTaps ?? []));
+listeners.push(m => {
+  if (m.type !== 'inspect' || !inspector || $('#inspect').classList.contains('hidden')) return;
+  inspector.addTap({ feat: m.feat, zone: m.zone, knuckle: m.knuckle, confidence: m.confidence, dist: m.dist, micDb: m.micDb, gyro: inspector.gyroAround(DEFAULT_CONFIG.postMs + 40) });
+  if (m.zone >= 0) { const [x, y] = [innerWidth / 2, 60]; fx.burst(x, y, COLORS[m.zone], 0.5, m.knuckle); }
+});
+// closing the inspector returns to normal play
+new MutationObserver(() => { if ($('#inspect').classList.contains('hidden') && screen === 'play') setMode({ kind: 'play' }); })
+  .observe($('#inspect'), { attributes: true, attributeFilter: ['class'] });
 
 // ---------- guided recording for analysis ----------
 const REC_GROUPS: { zone: number; knuckle: boolean }[] = [0, 1, 2, 3].map(z => ({ zone: z, knuckle: false })).concat([{ zone: 0, knuckle: true }]);

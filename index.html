@@ -132,6 +132,19 @@
     </div>
   </div>
 
+  <!-- SEE YOUR TAPS (overlay) -->
+  <div class="overlay hidden" id="inspect">
+    <div class="sheet">
+      <div class="sheet-head"><h2>See your taps</h2><button class="icon" data-close>✕</button></div>
+      <p class="fine">Each dot is one tap's sound fingerprint. Close dots sound alike. Coloured dots: your calibration (squares = knuckle). Rings: taps you make now, coloured by the area they matched. Overlapping colours = areas the app can't tell apart.</p>
+      <canvas id="inspect-map" class="inspect-map"></canvas>
+      <p class="fine">Last tap's sound (white bars) vs each area's average (lines):</p>
+      <canvas id="inspect-bars" class="inspect-bars"></canvas>
+      <pre id="inspect-readout" class="inspect-readout"></pre>
+      <div class="row-buttons"><button class="small ghost" id="inspect-clear">Clear taps</button></div>
+    </div>
+  </div>
+
   <!-- RECORDER (overlay) -->
   <div class="overlay hidden" id="recorder">
     <div class="sheet" style="align-items:center;text-align:center">
@@ -163,7 +176,7 @@
       </div>
       <h3>Help improve accuracy</h3>
       <p class="fine">Records your real taps (about 1 minute) and saves a sound file on this phone. Nothing is uploaded; you choose whether to share it.</p>
-      <div class="row-buttons"><button class="small" id="open-recorder">Record taps for analysis</button></div>
+      <div class="row-buttons"><button class="small" id="open-inspect">See your taps</button><button class="small ghost" id="open-recorder">Record taps for analysis</button></div>
       <h3>About</h3>
       <p class="fine">Version <span class="version"></span></p>
       <div class="row-buttons"><button class="small ghost" data-open="help">Help</button><button class="small ghost" data-open="privacy">Privacy</button></div>

@@ -34,10 +34,13 @@ with sync_playwright() as p:
     pg.wait_for_timeout(int(max(0, 33 - (time.time() - t0)) * 1000)); pg.screenshot(path=f'{OUT}/7-play.png')
     pg.wait_for_timeout(int(max(0, 47.2 - (time.time() - t0)) * 1000))
     pg.click('#open-settings'); pg.wait_for_timeout(200); pg.screenshot(path=f'{OUT}/8-settings.png')
+
     pg.click('#reknuckle')
     pg.wait_for_timeout(int(max(0, 62 - (time.time() - t0)) * 1000))
     pg.screenshot(path=f'{OUT}/9-knuckle-play.png')
     log = pg.evaluate('window.__bp.log'); prof = pg.evaluate('window.__bp.profile()')
+    pg.click('#open-settings'); pg.wait_for_timeout(200); pg.click('#open-inspect'); pg.wait_for_timeout(1000)
+    pg.screenshot(path=f'{OUT}/10-inspect.png', full_page=True)
     b.close()
 
 taps = [e for e in log if e['type'] in ('tap', 'unsure')]

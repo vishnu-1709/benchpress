@@ -28,7 +28,8 @@ export type Mode =
   | { kind: 'first' }                      // first-tap screen: any tap plays a sound
   | { kind: 'calibrate'; zone: number }    // collect finger taps for one zone
   | { kind: 'calibrateKnuckle'; zone: number } // collect knuckle taps for one zone
-  | { kind: 'play' };
+  | { kind: 'play' }
+  | { kind: 'inspect' };                    // like play, but silent and reports every tap's fingerprint
 
 export type ToWorklet =
   | { type: 'config'; config: DspConfig }
@@ -55,4 +56,5 @@ export type FromWorklet =
   | { type: 'latency'; ms: number | null; leak: number }
   | { type: 'loopFull' }
   | { type: 'stats'; echoDelayMs: number | null; echoLearned: boolean; quietSpeaker: boolean; leak: number; echoesRejected: number; tooQuiet: number; noise: number; minLevel: number; onsets: number }
-  | { type: 'rec'; channels: Float32Array[] };            // raw mic chunk while recording (both channels)
+  | { type: 'rec'; channels: Float32Array[] }
+  | { type: 'inspect'; feat: number[]; peak: number; zone: number; knuckle: boolean; confidence: number; dist: number; micDb: number | null; frame: number };            // raw mic chunk while recording (both channels)

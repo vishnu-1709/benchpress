@@ -119,11 +119,27 @@ class BenchpressProcessor extends AudioWorkletProcessor {
       this.post({ type: 'calTap', feat: Array.from(o.feat), peak: o.peak, rms: o.rms, frame: o.frame });
       return;
     }
+    if (mode.kind === 'inspect') {
+      const r = this.cls ? this.cls.classify(o.feat, o.peak, this.clsOut) : null;
+      this.post({ type: 'inspect', feat: Array.from(o.feat), peak: o.peak, zone: r ? r.zone : -1, knuckle: r ? r.knuckle : false,
+        confidence: r ? r.confidence : 0, dist: this.cls ? this.cls.lastDist : 0, micDb: this.micDbAt(o.frame), frame: o.frame });
+      return;
+    }
     if (!this.cls) return;
     const r = this.cls.classify(o.feat, o.peak, this.clsOut);
     if (r.zone < 0) { this.post({ type: 'unsure', frame: o.frame, velocity: r.velocity }); return; }
     this.playSound(this.soundFor(r.zone, r.knuckle), r.velocity, o.frame);
     this.post({ type: 'tap', zone: r.zone, knuckle: r.knuckle, velocity: r.velocity, confidence: r.confidence, frame: o.frame });
+  }
+
+  // ---------- two-mic level difference (inspect only) ----------
+  private e0 = new Float32Array(256); private e1 = new Float32Array(256); private has2 = false;
+  private micDbAt(onsetFrame: number): number | null {
+    if (!this.has2) return null;
+    const b0 = Math.floor(onsetFrame / 128), nb = Math.ceil(sampleRate * 0.015 / 128);
+    let a = 0, b = 0;
+    for (let k = b0; k <= b0 + nb; k++) { a += this.e0[k & 255]; b += this.e1[k & 255]; }
+    return a > 0 && b > 0 ? 10 * Math.log10(a / b) : null;
   }
 
   // ---------- loop recorder ----------
@@ -170,6 +186,13 @@ class BenchpressProcessor extends AudioWorkletProcessor {
     const input = inputs[0]?.[0];
     const out = outputs[0][0];
     const n = out.length;
+    if (input) {
+      const in1 = inputs[0][1];
+      if (in1) { // per-block energy of both mics, for the inspect screen
+        let a = 0, b = 0; for (let i = 0; i < input.length; i++) { a += input[i] * input[i]; b += in1[i] * in1[i]; }
+        const k = Math.floor(currentFrame / 128) & 255; this.e0[k] = a; this.e1[k] = b; if (b > 1e-9) this.has2 = true;
+      }
+    }
     if (input) this.det.process(input, this.onTapBound);
     if (this.recOn && inputs[0]?.length) {
       const chans = inputs[0];
