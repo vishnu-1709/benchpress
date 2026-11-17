@@ -360,6 +360,7 @@ $('#kn-cancel').addEventListener('click', () => { knuckleCal = null; closeOverla
 let playTaps = 0, playSince = 0, unsureTimes: number[] = [], wasLifted = false, tiltUnsub: (() => void) | null = null;
 function enterPlay() {
   show('play'); renderPads(); renderChips();
+  if (!store.get('benchpress.areaHint', false)) { store.set('benchpress.areaHint', true); toast('Tap inside the areas you calibrated', 4000); }
   setMode({ kind: 'play' });
   playTaps = 0; playSince = performance.now(); baselineTilt = currentTilt();
   tiltUnsub?.();
