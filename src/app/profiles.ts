@@ -3,7 +3,7 @@ import { DSP_VERSION, type TableModel } from '../engine/protocol';
 import { rejectDistance, surfaceQuality } from '../engine/dsp';
 import { store, type Tilt } from './env';
 
-export interface CalTap { zone: number; feat: number[]; peak: number }
+export interface CalTap { zone: number; feat: number[]; peak: number; rms?: number }
 
 export interface TableProfile {
   v: 1;
@@ -30,6 +30,12 @@ export function buildModel(p: Pick<TableProfile, 'zoneTaps' | 'knuckleTaps'>): T
     return ps.length ? ps.reduce((a, b) => a + b, 0) / ps.length : 0.1;
   });
   return { zoneFeats: feats, zoneLabels: labels, knuckleFeats: p.knuckleTaps.map(t => t.feat), knuckleLabels: p.knuckleTaps.map(t => t.zone), zonePeakMean, rejectDist: rejectDistance(feats, labels) };
+}
+
+/** Typical onset loudness of this user's taps on this table (median of calibration taps). */
+export function typicalTapRms(taps: CalTap[]): number | null {
+  const r = taps.map(t => t.rms ?? 0).filter(v => v > 0).sort((a, b) => a - b);
+  return r.length ? r[Math.floor(r.length / 2)] : null;
 }
 
 export function qualityOf(zoneTaps: CalTap[]) { return surfaceQuality(zoneTaps.map(t => t.feat), zoneTaps.map(t => t.zone)); }

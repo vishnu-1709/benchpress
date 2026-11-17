@@ -1,16 +1,17 @@
 // Message contract between the page (main thread) and the audio thread (AudioWorklet).
 // Keep this file the single source of truth: both sides import these types.
 
-export const DSP_VERSION = 3;
+export const DSP_VERSION = 4;
 
 export interface DspConfig {
   postMs: number;        // feature window after onset (ms); each ms is a ms of lag
   threshold: number;     // onset threshold, multiple of the noise floor
   rise: number;          // energy must rise this many times vs 5 ms earlier
   refractoryMs: number;  // ignore re-triggers within this window
+  minLevel: number;      // absolute floor (RMS): quieter sounds are never taps
 }
 
-export const DEFAULT_CONFIG: DspConfig = { postMs: 15, threshold: 10, rise: 4, refractoryMs: 60 };
+export const DEFAULT_CONFIG: DspConfig = { postMs: 15, threshold: 10, rise: 4, refractoryMs: 60, minLevel: 0.0004 };
 
 /** A trained table model: what calibration produced. */
 export interface TableModel {
@@ -47,7 +48,7 @@ export type FromWorklet =
   | { type: 'ready'; sampleRate: number }
   | { type: 'tap'; zone: number; knuckle: boolean; velocity: number; confidence: number; frame: number }
   | { type: 'unsure'; frame: number; velocity: number }
-  | { type: 'calTap'; feat: number[]; peak: number; frame: number }
+  | { type: 'calTap'; feat: number[]; peak: number; rms: number; frame: number }
   | { type: 'level'; rms: number }
   | { type: 'loop'; phase: LoopPhase; lengthSec: number; layers: number }
   | { type: 'latency'; ms: number | null; leak: number }

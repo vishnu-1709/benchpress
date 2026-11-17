@@ -5,7 +5,7 @@ import type { DspConfig, TableModel } from './protocol';
 export const N_BANDS = 24;
 export const N_FEAT = N_BANDS + 2; // bands + spectral centroid + decay ratio
 
-export interface Onset { frame: number; peak: number; feat: Float64Array }
+export interface Onset { frame: number; peak: number; rms: number; feat: Float64Array }
 
 /**
  * Onset detector + feature extractor working on a stream of mono blocks.
@@ -27,7 +27,7 @@ export class TapDetector {
   private hist = new Float64Array(8); private hi = 0;
   noise = 1e-4;
   private lastOnset = -1e12;
-  private pendingOnset = -1; private pendingDue = -1;
+  private pendingOnset = -1; private pendingDue = -1; private pendingRms = 0;
   private nfft = 1; private winN = 0; private preN = 0;
   private re: Float64Array; private im: Float64Array; private hann: Float64Array;
   private bandOf: Int16Array;
@@ -161,7 +161,7 @@ export class TapDetector {
 
   /** Feed one block. Calls onTap for every completed onset (feature vector is reused: copy it if kept). */
   process(block: Float32Array, onTap: (o: Onset) => void) {
-    const { threshold, rise, refractoryMs } = this.cfg;
+    const { threshold, rise, refractoryMs, minLevel } = this.cfg;
     let blockPow = 0;
     for (let i = 0; i < block.length; i++) {
       const x = block[i];
@@ -180,7 +180,7 @@ export class TapDetector {
         // while our own sound rings, a tap only adds to it: ask for a smaller jump
         const ringing = this.gate && this.outEnv[(this.outFrames - 1) & 1023] > 0.003;
         const needRise = ringing ? Math.min(rise, 3) : rise;
-        if (this.pendingOnset < 0 && rms > this.noise * threshold && rms > past * needRise && rms > 2e-4 && since > refractoryMs) {
+        if (this.pendingOnset < 0 && rms > this.noise * threshold && rms > past * needRise && rms > minLevel && since > refractoryMs) {
           this.lastOnset = this.total;
           if (this.gate) {
             const f = this.hi - 1, lvl = this.echoLevel(f);
@@ -193,13 +193,13 @@ export class TapDetector {
             }
             if (rms < this.echoMargin * this.leak * lvl) { this.echoesRejected++; continue; } // not louder than our own echo
           }
-          this.pendingOnset = this.total - this.hop;
+          this.pendingOnset = this.total - this.hop; this.pendingRms = rms;
           this.pendingDue = this.pendingOnset + this.winN - this.preN;
         }
       }
       if (this.pendingOnset >= 0 && this.total >= this.pendingDue) {
         const peak = this.extract(this.pendingOnset);
-        onTap({ frame: this.pendingOnset, peak, feat: this.feat });
+        onTap({ frame: this.pendingOnset, peak, rms: this.pendingRms, feat: this.feat });
         this.pendingOnset = -1;
       }
     }

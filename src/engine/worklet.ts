@@ -25,7 +25,6 @@ class BenchpressProcessor extends AudioWorkletProcessor {
   private choke = false; private chokeIds = new Set<string>(); private fadeLen = Math.round(sampleRate * 0.03);
   private spreadOf = new Map<string, number>();
   private droneHits: number[] = [];
-  private tick: Float32Array;
   private drone: Float32Array | null = null; private dronePos = 0; private droneGain = 0; private droneTarget = 0;
   private headphones = false;
   private clsOut = { zone: 0, knuckle: false, velocity: 0, confidence: 0 };
@@ -41,8 +40,6 @@ class BenchpressProcessor extends AudioWorkletProcessor {
 
   constructor() {
     super();
-    this.tick = new Float32Array(Math.round(sampleRate * 0.006));
-    for (let i = 0; i < this.tick.length; i++) this.tick[i] = Math.sin(2 * Math.PI * 2200 * i / sampleRate) * Math.exp(-i / (sampleRate * 0.0012));
     this.det.setEchoGate(true, null);
     this.click = new Float32Array(Math.round(sampleRate * 0.01));
     for (let i = 0; i < this.click.length; i++) this.click[i] = Math.exp(-i / (sampleRate * 0.0015)) * (i % 8 < 4 ? 0.9 : -0.9);
@@ -109,8 +106,8 @@ class BenchpressProcessor extends AudioWorkletProcessor {
     if (mode.kind === 'idle') return;
     if (mode.kind === 'first') { this.playSound(2, Math.min(1, 0.4 + o.peak * 4), o.frame); this.post({ type: 'tap', zone: -1, knuckle: false, velocity: 0.8, confidence: 1, frame: o.frame }); return; }
     if (mode.kind === 'calibrate' || mode.kind === 'calibrateKnuckle') {
-      this.startVoice(this.tick, 0.12, currentFrame, 10, true); // tiny, quiet tick: almost nothing to echo
-      this.post({ type: 'calTap', feat: Array.from(o.feat), peak: o.peak, frame: o.frame });
+      // calibration is silent: any sound here would echo back through the table and count as the next tap
+      this.post({ type: 'calTap', feat: Array.from(o.feat), peak: o.peak, rms: o.rms, frame: o.frame });
       return;
     }
     if (!this.cls) return;

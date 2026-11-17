@@ -1,10 +1,11 @@
 import './ui/style.css';
+declare const __APP_VERSION__: string;
 import qrcode from 'qrcode-generator';
 import { engine } from './engine/engine';
 import { DEFAULT_CONFIG, DSP_VERSION, type FromWorklet, type Mode } from './engine/protocol';
 import { PACKS, packById, renderPack } from './sounds/packs';
 import { Fx } from './ui/fx';
-import { buildModel, mergeTaps, profiles, qualityOf, type CalTap, type TableProfile } from './app/profiles';
+import { buildModel, mergeTaps, profiles, qualityOf, typicalTapRms, type CalTap, type TableProfile } from './app/profiles';
 import {
   currentTilt, inAppBrowser, isFlat, isIOS, isMobile, keepAwake, micSupported, needsOrientationPermission,
   onTilt, secure, startOrientation, store, tiltDelta, type Tilt,
@@ -42,7 +43,15 @@ let profile: TableProfile | null = null;
 let latencyMs: number | null = null;
 let baselineTilt: Tilt | null = null;
 const loadedPacks = new Set<string>();
-const config = () => ({ ...DEFAULT_CONFIG, threshold: 16 - prefs.sensitivity });
+// sensitivity 0..10: higher = softer taps count (and more risk of noise)
+// After calibration, anything much quieter than this person's normal tap on this table is ignored.
+const config = () => {
+  const typical = profile ? typicalTapRms(profile.zoneTaps) : null;
+  const scale = Math.pow(1.4, 6 - prefs.sensitivity);           // sensitivity 6 = default
+  const minLevel = typical ? 0.25 * typical * scale : DEFAULT_CONFIG.minLevel * scale;
+  return { ...DEFAULT_CONFIG, threshold: 16 - prefs.sensitivity, minLevel };
+};
+const applyConfig = () => engine.setConfig(config());
 
 function setMode(m: Mode) { engine.setMode(m); }
 
@@ -88,7 +97,7 @@ listeners.push(m => {
   }
   if (m.type === 'tap') onPlayTap(m.zone, m.knuckle, m.velocity);
   if (m.type === 'unsure') onUnsure();
-  if (m.type === 'calTap') onCalTap(m.feat, m.peak);
+  if (m.type === 'calTap') onCalTap(m.feat, m.peak, m.rms);
   if (m.type === 'loop') renderLoop(m.phase, m.layers);
   if (m.type === 'loopFull') toast('Loop is full');
   if (m.type === 'latency' && m.ms != null) latencyMs = m.ms;
@@ -96,6 +105,7 @@ listeners.push(m => {
 
 // ---------- landing / gates ----------
 function boot() {
+  $$('.version').forEach(v => v.textContent = __APP_VERSION__);
   if (inAppBrowser) $('#inapp-warning').classList.remove('hidden');
   if (!secure) showUnsupported('This page must be opened over https:// for the microphone to work.');
   else if (!micSupported) showUnsupported('This browser can\'t do live audio. Use Chrome on Android, or Safari 15+ on iPhone.');
@@ -184,7 +194,7 @@ function renderWelcome(saved: TableProfile[]) {
 $('#new-table').addEventListener('click', startFirstTap);
 function useProfile(t: TableProfile) {
   profile = t; profiles.use(t.id);
-  engine.setModel(buildModel(t));
+  engine.setModel(buildModel(t)); applyConfig();
   enterPlay();
   showBanner('Phone in a new spot? A quick re-tune helps.', 'Re-tune', () => startCalibration('quick'));
 }
@@ -216,11 +226,13 @@ function onFirstTap(vel: number) {
 // ---------- calibration ----------
 type CalKind = 'full' | 'quick';
 let cal: { kind: CalKind; zone: number; per: number; taps: CalTap[] } | null = null;
+let lastCalAt = 0;
 function startCalibration(kind: CalKind) {
   hideBanner();
   cal = { kind, zone: 0, per: kind === 'full' ? 5 : 2, taps: [] };
+  if (kind === 'full') engine.setConfig({ ...config(), minLevel: DEFAULT_CONFIG.minLevel });
   $('#cal-sub').textContent = kind === 'full'
-    ? 'Pick a spot about a hand away from the phone. Each tap ticks quietly so I can listen.'
+    ? 'Pick a spot about a hand away from the phone. Tap firmly, one tap at a time. I stay silent while I listen.'
     : 'Two taps on each spot you already use.';
   show('calibrate'); setCalZone(0);
 }
@@ -236,11 +248,16 @@ function renderDots(sel: string, n: number, filled: number, col: string) {
   const d = $(sel); d.innerHTML = '';
   for (let i = 0; i < n; i++) { const s = document.createElement('span'); if (i < filled) s.style.background = col; d.appendChild(s); }
 }
-function onCalTap(feat: number[], peak: number) {
-  if (knuckleCal) return onKnuckleTap(feat, peak);
+function onCalTap(feat: number[], peak: number, rms: number) {
+  if (knuckleCal) return onKnuckleTap(feat, peak, rms);
   if (!cal || screen !== 'calibrate') return;
-  const z = cal.zone;
-  cal.taps.push({ zone: z, feat, peak });
+  const z = cal.zone, now = performance.now();
+  // only deliberate taps: not too close together, not much quieter than the taps so far
+  if (now - lastCalAt < 250) return;
+  const peaks = cal.taps.map(t => t.peak).sort((a, b) => a - b);
+  if (peaks.length >= 2 && peak < 0.3 * peaks[Math.floor(peaks.length / 2)]) return;
+  lastCalAt = now;
+  cal.taps.push({ zone: z, feat, peak, rms });
   const n = cal.taps.filter(t => t.zone === z).length;
   renderDots('#cal-dots', cal.per, n, COLORS[z]);
   const dot = document.querySelector(`#cal-map b[data-z="${z}"]`)!.getBoundingClientRect();
@@ -257,7 +274,7 @@ function finishCalibration() {
   if (cal.kind === 'quick' && profile) {
     profile.zoneTaps = mergeTaps(profile.zoneTaps, cal.taps);
     profile.quality = qualityOf(profile.zoneTaps); profile.tilt = currentTilt();
-    profiles.save(profile); engine.setModel(buildModel(profile));
+    profiles.save(profile); engine.setModel(buildModel(profile)); applyConfig();
     cal = null; enterPlay(); toast(`Re-tuned · ${Math.round(profile.quality * 100)}% match`);
     return;
   }
@@ -276,7 +293,7 @@ $('#go-play').addEventListener('click', () => {
   if (!cal) return;
   const name = ($('#table-name') as HTMLInputElement).value.trim() || 'My table';
   profile = profiles.create(name, engine.sampleRate, currentTilt(), cal.taps, profile?.knuckleTaps ?? []);
-  profiles.save(profile); engine.setModel(buildModel(profile));
+  profiles.save(profile); engine.setModel(buildModel(profile)); applyConfig();
   cal = null; enterPlay();
 });
 $('#redo-cal').addEventListener('click', () => startCalibration('full'));
@@ -294,9 +311,10 @@ function setKnZone(z: number) {
   renderDots('#kn-dots', KN_PER, 0, COLORS[z]);
   setMode({ kind: 'calibrateKnuckle', zone: z });
 }
-function onKnuckleTap(feat: number[], peak: number) {
+function onKnuckleTap(feat: number[], peak: number, rms: number) {
   if (!knuckleCal || !profile) return;
-  knuckleCal.push({ zone: knZone, feat, peak });
+  const now = performance.now(); if (now - lastCalAt < 250) return; lastCalAt = now;
+  knuckleCal.push({ zone: knZone, feat, peak, rms });
   const n = knuckleCal.filter(t => t.zone === knZone).length;
   renderDots('#kn-dots', KN_PER, n, COLORS[knZone]);
   fx.burst(innerWidth / 2, innerHeight * 0.4, COLORS[knZone], 0.7, true);
@@ -394,7 +412,7 @@ function renderLoop(phase: string, layers: number) {
 // ---------- settings ----------
 const sens = $('#sens') as HTMLInputElement, hp = $('#headphones') as HTMLInputElement;
 sens.value = String(prefs.sensitivity); hp.checked = prefs.headphones;
-sens.addEventListener('input', () => { prefs.sensitivity = +sens.value; savePrefs(); engine.setConfig(config()); });
+sens.addEventListener('input', () => { prefs.sensitivity = +sens.value; savePrefs(); applyConfig(); });
 hp.addEventListener('change', () => { prefs.headphones = hp.checked; savePrefs(); engine.setHeadphones(hp.checked); });
 $('#latency-test').addEventListener('click', async () => {
   $('#latency-val').textContent = '…'; setMode({ kind: 'idle' }); engine.latencyTest();
@@ -423,11 +441,12 @@ function renderSettings() {
   if (!list.children.length) list.innerHTML = '<p class="fine">No saved tables yet.</p>';
   const s = engine.micSettings;
   $('#debug').textContent = [
-    `sample rate: ${engine.sampleRate} Hz · dsp v${DSP_VERSION}`,
+    `version: ${__APP_VERSION__} · sample rate: ${engine.sampleRate} Hz · dsp v${DSP_VERSION}`,
     `mic: ${s ? `echoCancel=${s.echoCancellation} noiseSupp=${s.noiseSuppression} autoGain=${s.autoGainControl} ch=${s.channelCount}` : '—'}`,
     `output latency: ${engine.ctx ? `base ${Math.round((engine.ctx.baseLatency || 0) * 1000)} ms, out ${Math.round(((engine.ctx as any).outputLatency || 0) * 1000)} ms` : '—'}`,
     `round trip: ${latencyMs == null ? '—' : Math.round(latencyMs) + ' ms'}`,
     `table: ${profile ? `${profile.name}, ${profile.zoneTaps.length} taps, ${Math.round(profile.quality * 100)}%` : '—'}`,
+    `tap floor: ${config().minLevel.toFixed(4)} (typical tap ${(profile && typicalTapRms(profile.zoneTaps))?.toFixed(4) ?? '—'})`,
     `tilt: ${JSON.stringify(currentTilt())}`, `iOS: ${isIOS} · UA: ${navigator.userAgent}`,
   ].join('\n');
 }
