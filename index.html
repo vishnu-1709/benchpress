@@ -129,6 +129,20 @@
     </div>
   </div>
 
+  <!-- RECORDER (overlay) -->
+  <div class="overlay hidden" id="recorder">
+    <div class="sheet" style="align-items:center;text-align:center">
+      <h2 id="rec-title">Record your taps</h2>
+      <p class="lead" id="rec-sub">10 taps on each spot, then 10 knuckle knocks on blue. Use the same spots you calibrated. The phone stays on the table.</p>
+      <div class="dots" id="rec-dots"></div>
+      <div class="meter"><i id="rec-meter"></i></div>
+      <a class="primary hidden" id="rec-save" download>Save recording</a>
+      <p class="fine hidden" id="rec-info"></p>
+      <button class="primary" id="rec-start">Start</button>
+      <button class="link" id="rec-cancel">Cancel</button>
+    </div>
+  </div>
+
   <!-- SETTINGS (drawer) -->
   <div class="overlay hidden" id="settings">
     <div class="sheet drawer">
@@ -144,6 +158,9 @@
         <button class="small ghost" id="recalibrate">Full recalibration</button>
         <button class="small ghost" id="reknuckle">Retrain knuckle</button>
       </div>
+      <h3>Help improve accuracy</h3>
+      <p class="fine">Records your real taps (about 1 minute) and saves a sound file on this phone. Nothing is uploaded; you choose whether to share it.</p>
+      <div class="row-buttons"><button class="small" id="open-recorder">Record taps for analysis</button></div>
       <h3>About</h3>
       <p class="fine">Version <span class="version"></span></p>
       <div class="row-buttons"><button class="small ghost" data-open="help">Help</button><button class="small ghost" data-open="privacy">Privacy</button></div>

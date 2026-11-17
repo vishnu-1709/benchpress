@@ -37,6 +37,14 @@ class BenchpressProcessor extends AudioWorkletProcessor {
   private latTestAt = -1; private click: Float32Array;
   private levelEvery = Math.round(sampleRate / 30); private levelAcc = 0;
   private onTapBound = (o: Onset) => this.onTap(o);
+  // raw recording for analysis (allocates, but only while recording; no sounds play then)
+  private recOn = false; private recBuf: Float32Array[] = []; private recN = 0;
+  private flushRec() {
+    if (!this.recBuf.length || !this.recN) return;
+    const ch = this.recBuf.map(b => b.slice(0, this.recN));
+    this.port.postMessage({ type: 'rec', channels: ch }, ch.map(c => c.buffer));
+    this.recBuf = []; this.recN = 0;
+  }
 
   constructor() {
     super();
@@ -66,6 +74,7 @@ class BenchpressProcessor extends AudioWorkletProcessor {
       case 'headphones': this.headphones = m.on; this.det.setEchoGate(!m.on, null); break;
       case 'loop': m.cmd === 'clear' ? this.loopClear() : this.loopToggle(); break;
       case 'latencyTest': this.latTestAt = currentFrame + 128; break;
+      case 'record': this.recOn = m.on; if (!m.on) this.flushRec(); break;
       case 'preview': this.startVoice(this.kits.get(this.current)?.[m.sound] ?? null, m.gain, currentFrame); break;
     }
   }
@@ -162,6 +171,13 @@ class BenchpressProcessor extends AudioWorkletProcessor {
     const out = outputs[0][0];
     const n = out.length;
     if (input) this.det.process(input, this.onTapBound);
+    if (this.recOn && inputs[0]?.length) {
+      const chans = inputs[0];
+      if (!this.recBuf.length) this.recBuf = chans.map(() => new Float32Array(8192));
+      for (let c = 0; c < this.recBuf.length; c++) this.recBuf[c].set(chans[c] ?? chans[0], this.recN);
+      this.recN += chans[0].length;
+      if (this.recN + 128 > 8192) this.flushRec();
+    }
     this.loopTick(currentFrame, n);
     if (this.latTestAt > 0 && currentFrame <= this.latTestAt && this.latTestAt < currentFrame + n) {
       const v = this.voices[0]; v.buf = this.click; v.pos = 0; v.gain = 1; // no mask: we want to hear it

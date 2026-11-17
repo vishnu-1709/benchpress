@@ -40,7 +40,8 @@ export type ToWorklet =
   | { type: 'headphones'; on: boolean }
   | { type: 'loop'; cmd: 'toggle' | 'clear' }
   | { type: 'latencyTest' }
-  | { type: 'preview'; sound: number; gain: number };
+  | { type: 'preview'; sound: number; gain: number }
+  | { type: 'record'; on: boolean };
 
 export type LoopPhase = 'empty' | 'recording' | 'playing' | 'overdub';
 
@@ -52,4 +53,5 @@ export type FromWorklet =
   | { type: 'level'; rms: number }
   | { type: 'loop'; phase: LoopPhase; lengthSec: number; layers: number }
   | { type: 'latency'; ms: number | null; leak: number }
-  | { type: 'loopFull' };
+  | { type: 'loopFull' }
+  | { type: 'rec'; channels: Float32Array[] };            // raw mic chunk while recording (both channels)

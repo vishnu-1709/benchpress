@@ -24,12 +24,12 @@ export class Engine {
     await this.unlock();
     const ctx = this.ctx!;
     this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: { ideal: 1 } },
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: { ideal: 2 } }, // two mics where the phone allows it
     });
     const track = this.stream.getAudioTracks()[0];
     this.micSettings = track.getSettings();
     await ctx.audioWorklet.addModule(workletUrl);
-    this.node = new AudioWorkletNode(ctx, 'benchpress', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2] });
+    this.node = new AudioWorkletNode(ctx, 'benchpress', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 2, channelCountMode: 'explicit', channelInterpretation: 'discrete' });
     this.node.port.onmessage = (e: MessageEvent<FromWorklet>) => this.listeners.forEach(l => l(e.data));
     const src = ctx.createMediaStreamSource(this.stream);
     // the worklet reads channel 0 only; stereo mics are fine
@@ -58,6 +58,7 @@ export class Engine {
   loop(cmd: 'toggle' | 'clear') { this.send({ type: 'loop', cmd }); }
   latencyTest() { this.send({ type: 'latencyTest' }); }
   preview(sound: number, gain = 0.8) { this.send({ type: 'preview', sound, gain }); }
+  record(on: boolean) { this.send({ type: 'record', on }); }
 }
 
 export const engine = new Engine();

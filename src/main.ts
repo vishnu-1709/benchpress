@@ -5,6 +5,7 @@ import { engine } from './engine/engine';
 import { DEFAULT_CONFIG, DSP_VERSION, type FromWorklet, type Mode } from './engine/protocol';
 import { PACKS, packById, renderPack } from './sounds/packs';
 import { Fx } from './ui/fx';
+import { Recorder } from './app/recorder';
 import { buildModel, mergeTaps, profiles, qualityOf, typicalTapRms, type CalTap, type TableProfile } from './app/profiles';
 import {
   currentTilt, inAppBrowser, isFlat, isIOS, isMobile, keepAwake, micSupported, needsOrientationPermission,
@@ -477,6 +478,57 @@ function renderSettings() {
   ].join('\n');
 }
 $('#open-settings').addEventListener('click', () => openOverlay('settings'));
+
+// ---------- guided recording for analysis ----------
+const REC_GROUPS: { zone: number; knuckle: boolean }[] = [0, 1, 2, 3].map(z => ({ zone: z, knuckle: false })).concat([{ zone: 0, knuckle: true }]);
+const REC_PER = 10;
+let rec: { recorder: Recorder; group: number; n: number; lastAt: number; busy: boolean } | null = null;
+$('#open-recorder').addEventListener('click', () => {
+  closeOverlay('settings'); openOverlay('recorder');
+  $('#rec-title').textContent = 'Record your taps';
+  $('#rec-sub').textContent = '10 taps on each spot, then 10 knuckle knocks on blue. Use the same spots you calibrated. The phone stays on the table.';
+  $('#rec-start').classList.remove('hidden'); $('#rec-save').classList.add('hidden'); $('#rec-info').classList.add('hidden'); $('#rec-dots').innerHTML = '';
+});
+$('#rec-cancel').addEventListener('click', async () => { if (rec) { await rec.recorder.finish(); rec = null; } closeOverlay('recorder'); setMode({ kind: screen === 'play' ? 'play' : 'idle' }); });
+$('#rec-start').addEventListener('click', async () => {
+  $('#rec-start').classList.add('hidden');
+  setMode({ kind: 'idle' }); engine.loop('clear');
+  rec = { recorder: new Recorder(), group: 0, n: 0, lastAt: 0, busy: true };
+  rec.recorder.start();
+  await recPause('Hands off the table…', 2000);
+  recGroup(0);
+});
+function recPause(text: string, ms: number) {
+  if (rec) rec.busy = true;
+  setMode({ kind: 'idle' }); $('#rec-title').textContent = text; $('#rec-sub').textContent = 'Recording silence between spots helps me split your taps.';
+  return new Promise(r => setTimeout(r, ms));
+}
+function recGroup(g: number) {
+  if (!rec) return;
+  const G = REC_GROUPS[g]; rec.group = g; rec.n = 0; rec.busy = false;
+  $('#rec-title').innerHTML = `${G.knuckle ? 'Knock' : 'Tap'} <span style="color:${COLORS[G.zone]}">${NAMES[G.zone]}</span> ${REC_PER} times${G.knuckle ? ' with a knuckle' : ''}.`;
+  $('#rec-sub').textContent = `Spot ${g + 1} of ${REC_GROUPS.length}. Mix soft and firm taps, like you'd play.`;
+  renderDots('#rec-dots', REC_PER, 0, COLORS[G.zone]);
+  setMode({ kind: 'calibrate', zone: G.zone }); // silent; we only count taps here
+}
+listeners.push(async m => {
+  if (m.type === 'level' && rec) $('#rec-meter').style.width = `${meterPos(m.rms) * 100}%`;
+  if (m.type !== 'calTap' || !rec || rec.busy) return;
+  const now = performance.now(); if (now - rec.lastAt < 200) return; rec.lastAt = now;
+  rec.n++; renderDots('#rec-dots', REC_PER, rec.n, COLORS[REC_GROUPS[rec.group].zone]);
+  if (rec.n < REC_PER) return;
+  if (rec.group < REC_GROUPS.length - 1) { await recPause('Stop. Hands off…', 2500); recGroup(rec.group + 1); return; }
+  await recPause('Done. Saving…', 1500);
+  const r = await rec.recorder.finish(); rec = null;
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
+  const a = $('#rec-save') as HTMLAnchorElement;
+  a.href = URL.createObjectURL(r.blob); a.download = `benchpress-taps-${stamp}.wav`; a.classList.remove('hidden');
+  $('#rec-title').textContent = 'Recorded.';
+  $('#rec-sub').textContent = 'Save it, then send the file to Claude in the chat.';
+  const info = $('#rec-info'); info.classList.remove('hidden');
+  info.textContent = `${r.seconds.toFixed(0)} s · ${(engine.micSettings?.channelCount ?? 1) >= 2 ? '2 microphones' : '1 microphone'} · ${engine.sampleRate} Hz · ${(r.blob.size / 1e6).toFixed(1)} MB · order: blue, pink, yellow, green, knuckle on blue`;
+  setMode({ kind: screen === 'play' ? 'play' : 'idle' });
+});
 
 // keep audio alive across tab switches
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') engine.ctx?.resume(); });
